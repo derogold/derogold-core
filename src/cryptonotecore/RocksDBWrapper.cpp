@@ -215,9 +215,8 @@ namespace CryptoNote
 
         optimizeCancelRequested.store(false);
 
-        const std::string dbData = getDataDir(config);
-        const rocksdb::Options dbOptions = getDBOptions(config);
         rocksdb::DB *rocksDb = nullptr;
+        bool ownsDbHandle = false;
 
         auto clearOptimizeHandle = [&]()
         {
@@ -238,10 +237,20 @@ namespace CryptoNote
                                                    });
         (void) stopOptimize;
 
-        const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &rocksDb);
-        if (!openStatus.ok())
+        if (state.load() == INITIALIZED && db)
         {
-            throw std::runtime_error("Failed to open DB for optimization: " + openStatus.ToString());
+            rocksDb = db.get();
+        }
+        else
+        {
+            const std::string dbData = getDataDir(config);
+            const rocksdb::Options dbOptions = getDBOptions(config);
+            const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &rocksDb);
+            if (!openStatus.ok())
+            {
+                throw std::runtime_error("Failed to open DB for optimization: " + openStatus.ToString());
+            }
+            ownsDbHandle = true;
         }
 
         setOptimizeHandle(rocksDb);
@@ -288,7 +297,7 @@ namespace CryptoNote
 
         auto waitForCompactOptions = rocksdb::WaitForCompactOptions();
         waitForCompactOptions.flush = true;
-        waitForCompactOptions.close_db = true;
+        waitForCompactOptions.close_db = ownsDbHandle;
         const rocksdb::Status waitStatus = rocksDb->WaitForCompact(waitForCompactOptions);
 
         monitorStop.store(true);
@@ -297,8 +306,11 @@ namespace CryptoNote
             monitorThread.join();
         }
 
-        delete rocksDb;
-        rocksDb = nullptr;
+        if (ownsDbHandle)
+        {
+            delete rocksDb;
+            rocksDb = nullptr;
+        }
         clearOptimizeHandle();
 
         if (optimizeCancelRequested.load())
