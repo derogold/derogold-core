@@ -18,12 +18,6 @@
     "cpp-httplib",
     "cryptopp",
     "cxxopts",
-    {
-      "name": "leveldb",
-      "features": [
-        "snappy"
-      ]
-    },
     "miniupnpc",
     "openssl",
     "rapidjson",

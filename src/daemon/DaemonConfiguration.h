@@ -18,6 +18,13 @@ namespace DaemonConfig
 {
     struct DaemonConfiguration
     {
+        static constexpr uint32_t MIN_PRUNE_DEPTH_DAYS = 7;
+        static constexpr uint32_t MIN_PRUNE_DEPTH =
+            CryptoNote::parameters::EXPECTED_NUMBER_OF_BLOCKS_PER_DAY * MIN_PRUNE_DEPTH_DAYS;
+        static constexpr uint32_t DEFAULT_PRUNE_DEPTH = MIN_PRUNE_DEPTH;
+        static constexpr const char *DAEMON_MODE_STANDARD = "standard";
+        static constexpr const char *DAEMON_MODE_EXPLORER = "explorer";
+
         bool help = false;
         bool version = false;
         bool osVersion = false;
@@ -27,8 +34,6 @@ namespace DaemonConfig
         bool importChain = false;
         bool exportChain = false;
         uint32_t exportNumBlocks = 0;
-        bool exportCheckPoints = false;
-
         bool printGenesisTx = false;
 
         std::string configFile;
@@ -38,11 +43,9 @@ namespace DaemonConfig
         std::string logFile;
         int logLevel = Logging::WARNING;
         bool noConsole = false;
+        std::string daemonMode = DAEMON_MODE_STANDARD;
         std::string outputFile;
 
-        bool enableBlockExplorer = false;
-        bool enableBlockExplorerDetailed = false;
-        bool enableMining = false;
         std::string enableCors;
         bool enableTrtlRpc = false;
         std::string feeAddress;
@@ -62,15 +65,15 @@ namespace DaemonConfig
         std::vector<std::string> priorityNodes;
         std::vector<std::string> seedNodes;
 
-        bool enableLevelDB = false;
         bool enableDbCompression = true;
         uint64_t dbMaxOpenFiles = CryptoNote::ROCKSDB_MAX_OPEN_FILES;
         uint64_t dbReadCacheSizeMB = CryptoNote::ROCKSDB_READ_BUFFER_MB;
         int dbThreads = static_cast<int>(std::thread::hardware_concurrency());
         uint64_t dbWriteBufferSizeMB = CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
-        uint64_t dbMaxFileSizeMB = CryptoNote::LEVELDB_MAX_FILE_SIZE_MB;
         bool dbOptimize = false;
-        bool dbUseExperimentalSerializer = false;
+
+        bool prune = false;
+        uint32_t pruneDepth = DEFAULT_PRUNE_DEPTH;
 
         uint32_t transactionValidationThreads = std::thread::hardware_concurrency();
 

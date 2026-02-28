@@ -405,7 +405,7 @@ bool DaemonCommandsHandler::status(const std::vector<std::string> &args)
     statusTable.emplace_back("Next Fork", Utilities::get_fork_time(networkHeight, upgradeHeights));
     statusTable.emplace_back("Transaction Pool Size", std::to_string(m_core.getPoolTransactionHashes().size()));
     statusTable.emplace_back("Alternative Block Count", std::to_string(m_core.getAlternativeBlockCount()));
-    statusTable.emplace_back("DB Engine", m_config.enableLevelDB ? "LevelDB" : "RocksDB");
+    statusTable.emplace_back("DB Engine", "RocksDB");
     statusTable.emplace_back("Version", PROJECT_VERSION_WITH_BUILD);
 
     size_t longestValue = 0;

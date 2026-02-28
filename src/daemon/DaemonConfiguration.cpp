@@ -13,6 +13,8 @@
 #include "config/CryptoNoteConfig.h"
 
 #include <cxxopts.hpp>
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <logging/ILogger.h>
 #include <rapidjson/document.h>
@@ -25,6 +27,39 @@ using namespace rapidjson;
 
 namespace DaemonConfig
 {
+    namespace
+    {
+        uint32_t clampPruneDepth(const uint32_t depth, const std::string &source)
+        {
+            if (depth >= DaemonConfiguration::MIN_PRUNE_DEPTH)
+            {
+                return depth;
+            }
+
+            std::cout << CryptoNote::getProjectCLIHeader() << "The configured prune depth (" << depth
+                      << ") from " << source << " is below the enforced minimum (" << DaemonConfiguration::MIN_PRUNE_DEPTH
+                      << ", about " << DaemonConfiguration::MIN_PRUNE_DEPTH_DAYS
+                      << " days). Using the minimum." << std::endl;
+
+            return DaemonConfiguration::MIN_PRUNE_DEPTH;
+        }
+
+        std::string normalizeDaemonMode(const std::string &rawMode)
+        {
+            std::string mode = rawMode;
+            std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+
+            if (mode == DaemonConfiguration::DAEMON_MODE_STANDARD || mode == DaemonConfiguration::DAEMON_MODE_EXPLORER)
+            {
+                return mode;
+            }
+
+            throw std::runtime_error(
+                "Invalid daemon-mode: '" + rawMode + "'. Allowed values are 'standard' or 'explorer'.");
+        }
+    } // namespace
+
     DaemonConfiguration initConfiguration(const char *path)
     {
         DaemonConfiguration config;
@@ -42,13 +77,15 @@ namespace DaemonConfig
             ("version", "Output daemon version information.", cxxopts::value<bool>(config.version))
             ("os-version", "Output Operating System version information.", cxxopts::value<bool>(config.osVersion))
             ("resync", "Forces the daemon to delete the blockchain data and start resyncing.", cxxopts::value<bool>(config.resync))
+            ("prune", "Enable pruned-node mode.", cxxopts::value<bool>(config.prune)->default_value(config.prune ? "true" : "false"))
+            ("prune-depth", "When prune mode is enabled, retain at least this many recent blocks locally.",
+             cxxopts::value<uint32_t>(config.pruneDepth), "<blocks>")
             ("rewind-to-height", "Rewinds the local blockchain cache to the specified height.", cxxopts::value<uint32_t>(config.rewindToHeight), "<height>");
 
         options.add_options("Import / Export")
             ("import-blockchain", "Import blockchain from dump file.", cxxopts::value<bool>(config.importChain))
             ("export-blockchain", "Export blockchain to a dump file.", cxxopts::value<bool>(config.exportChain))
-            ("max-export-blocks", "Maximum number of blocks for export to dump file.", cxxopts::value<uint32_t>(config.exportNumBlocks), "<blocks>")
-            ("export-checkpoints", "Export blockchain checkpoints.", cxxopts::value<bool>(config.exportCheckPoints));
+            ("max-export-blocks", "Maximum number of blocks for export to dump file.", cxxopts::value<uint32_t>(config.exportNumBlocks), "<blocks>");
 
         options.add_options("Genesis Block")
             ("print-genesis-tx", "Print the genesis block transaction hex and exits.", cxxopts::value<bool>(config.printGenesisTx));
@@ -57,6 +94,8 @@ namespace DaemonConfig
             ("c,config-file", "Specify the <path> to a configuration file", cxxopts::value<std::string>(config.configFile), "<path>")
             ("data-dir", "Specify the <path> to the Blockchain data directory", cxxopts::value<std::string>(config.dataDirectory), "<path>")
             ("dump-config", "Prints the current configuration to the screen", cxxopts::value<bool>(config.dumpConfig))
+            ("daemon-mode", "Daemon RPC mode: standard or explorer",
+             cxxopts::value<std::string>(config.daemonMode), "<standard|explorer>")
             ("load-checkpoints", "Specify a file <path> containing a CSV of Blockchain checkpoints for faster sync. A value of 'default' uses the built-in checkpoints.", cxxopts::value<std::string>(config.checkPoints), "<path>")
             ("log-file", "Specify the <path> to the log file", cxxopts::value<std::string>(config.logFile), "<path>")
             ("log-level", "Specify log level", cxxopts::value<int>(config.logLevel))
@@ -64,9 +103,6 @@ namespace DaemonConfig
             ("save-config", "Save the configuration to the specified <file>", cxxopts::value<std::string>(config.outputFile), "<file>");
 
         options.add_options("RPC")
-            ("enable-blockexplorer", "Enable the Blockchain Explorer RPC", cxxopts::value<bool>(config.enableBlockExplorer))
-            ("enable-blockexplorer-detailed", "Enable the Blockchain Explorer Detailed RPC", cxxopts::value<bool>(config.enableBlockExplorerDetailed))
-            ("enable-mining", "Enable Mining RPC", cxxopts::value<bool>(config.enableMining))
             ("enable-cors", "Adds header 'Access-Control-Allow-Origin' to the RPC responses using the <domain>. Uses the value specified as the domain. Use * for all.", cxxopts::value<std::string>(config.enableCors), "<domain>")
             ("enable-trtl-rpc", "Enable the turtlecoin RPC API", cxxopts::value<bool>(config.enableTrtlRpc))
             ("fee-address", "Sets the convenience charge <address> for light wallets that use the daemon", cxxopts::value<std::string>(config.feeAddress), "<address>")
@@ -89,30 +125,21 @@ namespace DaemonConfig
             ("seed-node", "Connect to a node to retrieve the peer list and then disconnect", cxxopts::value<std::vector<std::string>>(config.seedNodes), "<ip:port>");
 
         const std::string maxOpenFiles =
-            "(default: " + std::to_string(CryptoNote::ROCKSDB_MAX_OPEN_FILES)
-            + " (ROCKSDB), " + std::to_string(CryptoNote::LEVELDB_MAX_OPEN_FILES)
-            + " (LEVELDB))";
+            "(default: " + std::to_string(CryptoNote::ROCKSDB_MAX_OPEN_FILES) + ")";
 
         const std::string readCache =
-            "(default: " + std::to_string(CryptoNote::ROCKSDB_READ_BUFFER_MB)
-            + " (ROCKSDB), " + std::to_string(CryptoNote::LEVELDB_READ_BUFFER_MB)
-            + " (LEVELDB))";
+            "(default: " + std::to_string(CryptoNote::ROCKSDB_READ_BUFFER_MB) + ")";
 
         const std::string writeBuffer =
-            "(default: " + std::to_string(CryptoNote::ROCKSDB_WRITE_BUFFER_MB)
-            + " (ROCKSDB), " + std::to_string(CryptoNote::LEVELDB_WRITE_BUFFER_MB)
-            + " (LEVELDB))";
+            "(default: " + std::to_string(CryptoNote::ROCKSDB_WRITE_BUFFER_MB) + ")";
 
         options.add_options("Database")
-            ("db-enable-level-db", "Use LevelDB instead of RocksDB", cxxopts::value<bool>(config.enableLevelDB))
             ("db-enable-compression", "Enable database compression", cxxopts::value<bool>(config.enableDbCompression)->default_value(config.enableDbCompression ? "true" : "false"))
             ("db-max-open-files", "Number of files that can be used by the database at one time " + maxOpenFiles, cxxopts::value<int>())
             ("db-read-buffer-size", "Size of the database read cache in megabytes (MB) " + readCache, cxxopts::value<int>())
             ("db-threads", "Number of background threads used for compaction and flush operations (RocksDB only)", cxxopts::value<int>(config.dbThreads))
             ("db-write-buffer-size", "Size of the database write buffer in megabytes (MB) " + writeBuffer, cxxopts::value<int>())
-            ("db-max-file-size", "Max file size of database files in megabytes (MB) (LevelDB only)", cxxopts::value<int>()->default_value(std::to_string(CryptoNote::LEVELDB_MAX_FILE_SIZE_MB)))
-            ("db-optimize", "Optimize database and close", cxxopts::value<bool>(config.dbOptimize))
-            ("db-use-experimental-serializer", "Use experimental serializer to store the blockchain data.", cxxopts::value<bool>(config.dbUseExperimentalSerializer));
+            ("db-optimize", "Optimize database and close", cxxopts::value<bool>(config.dbOptimize));
 
         options.add_options("Syncing")
             ("transaction-validation-threads", "Number of threads to use to validate a transaction's inputs in parallel.", cxxopts::value<uint32_t>(config.transactionValidationThreads));
@@ -138,34 +165,22 @@ namespace DaemonConfig
                 exit(1);
             }
 
-            /* Using levelDB, lets set the level DB defaults. Will overwrite with
-             * passed in values later if present. */
-            if (cli.count("db-enable-level-db") > 0 && config.enableLevelDB)
+            config.dbMaxOpenFiles = cli.count("db-max-open-files") > 0 ? cli["db-max-open-files"].as<int>()
+                                                                       : CryptoNote::ROCKSDB_MAX_OPEN_FILES;
+            config.dbReadCacheSizeMB = cli.count("db-read-buffer-size") > 0 ? cli["db-read-buffer-size"].as<int>()
+                                                                            : CryptoNote::ROCKSDB_READ_BUFFER_MB;
+            config.dbWriteBufferSizeMB = cli.count("db-write-buffer-size") > 0
+                                           ? cli["db-write-buffer-size"].as<int>()
+                                           : CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
+
+            if (cli.count("daemon-mode") > 0)
             {
-                config.dbMaxOpenFiles = cli.count("db-max-open-files") > 0 ? cli["db-max-open-files"].as<int>()
-                                                                           : CryptoNote::LEVELDB_MAX_OPEN_FILES;
-                config.dbReadCacheSizeMB = cli.count("db-read-buffer-size") > 0 ? cli["db-read-buffer-size"].as<int>()
-                                                                                : CryptoNote::LEVELDB_READ_BUFFER_MB;
-                config.dbWriteBufferSizeMB = cli.count("db-write-buffer-size") > 0
-                                               ? cli["db-write-buffer-size"].as<int>()
-                                               : CryptoNote::LEVELDB_WRITE_BUFFER_MB;
-                config.dbMaxFileSizeMB = cli.count("db-max-file-size") > 0 ? cli["db-max-file-size"].as<int>()
-                                                                           : CryptoNote::LEVELDB_MAX_FILE_SIZE_MB;
-            }
-            else
-            {
-                config.dbMaxOpenFiles = cli.count("db-max-open-files") > 0 ? cli["db-max-open-files"].as<int>()
-                                                                           : CryptoNote::ROCKSDB_MAX_OPEN_FILES;
-                config.dbReadCacheSizeMB = cli.count("db-read-buffer-size") > 0 ? cli["db-read-buffer-size"].as<int>()
-                                                                                : CryptoNote::ROCKSDB_READ_BUFFER_MB;
-                config.dbWriteBufferSizeMB = cli.count("db-write-buffer-size") > 0
-                                               ? cli["db-write-buffer-size"].as<int>()
-                                               : CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
+                config.daemonMode = normalizeDaemonMode(cli["daemon-mode"].as<std::string>());
             }
 
-            if (cli.count("db-max-file-size") > 0)
+            if (cli.count("prune-depth") > 0)
             {
-                config.dbMaxFileSizeMB = cli["db-max-file-size"].as<int>();
+                config.pruneDepth = clampPruneDepth(cli["prune-depth"].as<uint32_t>(), "CLI");
             }
 
             if (config.help) // Do we want to display the help message?
@@ -239,21 +254,6 @@ namespace DaemonConfig
 
         // RPC Options
 
-        if (j.HasMember("enable-blockexplorer"))
-        {
-            config.enableBlockExplorer = j["enable-blockexplorer"].GetBool();
-        }
-
-        if (j.HasMember("enable-blockexplorer-detailed"))
-        {
-            config.enableBlockExplorerDetailed = j["enable-blockexplorer-detailed"].GetBool();
-        }
-
-        if (j.HasMember("enable-mining"))
-        {
-            config.enableMining = j["enable-mining"].GetBool();
-        }
-
         if (j.HasMember("enable-cors"))
         {
             config.enableCors = j["enable-cors"].GetString();
@@ -272,6 +272,19 @@ namespace DaemonConfig
         if (j.HasMember("fee-amount"))
         {
             config.feeAmount = j["fee-amount"].GetInt();
+        }
+
+        if (j.HasMember("daemon-mode"))
+        {
+            config.daemonMode = normalizeDaemonMode(j["daemon-mode"].GetString());
+        }
+        else if (j.HasMember("enable-blockexplorer-detailed") && j["enable-blockexplorer-detailed"].GetBool())
+        {
+            config.daemonMode = DaemonConfiguration::DAEMON_MODE_EXPLORER;
+        }
+        else if (j.HasMember("enable-blockexplorer") && j["enable-blockexplorer"].GetBool())
+        {
+            config.daemonMode = DaemonConfiguration::DAEMON_MODE_EXPLORER;
         }
 
         // Network Options
@@ -359,24 +372,10 @@ namespace DaemonConfig
         }
 
         // Database Options
-
-        /* Using levelDB, lets set the level DB defaults. Will overwrite with
-         * passed in values later if present. */
-        if (j.HasMember("db-enable-level-db") && j["db-enable-level-db"].GetBool())
-        {
-            config.enableLevelDB = true;
-            config.dbMaxOpenFiles = CryptoNote::LEVELDB_MAX_OPEN_FILES;
-            config.dbReadCacheSizeMB = CryptoNote::LEVELDB_READ_BUFFER_MB;
-            config.dbWriteBufferSizeMB = CryptoNote::LEVELDB_WRITE_BUFFER_MB;
-            config.dbMaxFileSizeMB = CryptoNote::LEVELDB_MAX_FILE_SIZE_MB;
-        }
-        else
-        {
-            config.dbMaxOpenFiles = CryptoNote::ROCKSDB_MAX_OPEN_FILES;
-            config.dbReadCacheSizeMB = CryptoNote::ROCKSDB_READ_BUFFER_MB;
-            config.dbWriteBufferSizeMB = CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
-            config.dbThreads = CryptoNote::ROCKSDB_BACKGROUND_THREADS;
-        }
+        config.dbMaxOpenFiles = CryptoNote::ROCKSDB_MAX_OPEN_FILES;
+        config.dbReadCacheSizeMB = CryptoNote::ROCKSDB_READ_BUFFER_MB;
+        config.dbWriteBufferSizeMB = CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
+        config.dbThreads = CryptoNote::ROCKSDB_BACKGROUND_THREADS;
 
         if (j.HasMember("db-enable-compression"))
         {
@@ -403,14 +402,14 @@ namespace DaemonConfig
             config.dbWriteBufferSizeMB = j["db-write-buffer-size"].GetInt();
         }
 
-        if (j.HasMember("db-max-file-size"))
+        if (j.HasMember("prune"))
         {
-            config.dbMaxFileSizeMB = j["db-max-file-size"].GetInt();
+            config.prune = j["prune"].GetBool();
         }
 
-        if (j.HasMember("db-use-experimental-serializer"))
+        if (j.HasMember("prune-depth"))
         {
-            config.dbUseExperimentalSerializer = j["db-use-experimental-serializer"].GetBool();
+            config.pruneDepth = clampPruneDepth(j["prune-depth"].GetUint(), "config file");
         }
 
         // Syncing Options
@@ -434,9 +433,7 @@ namespace DaemonConfig
         j.AddMember("log-level", config.logLevel, alloc);
         j.AddMember("no-console", config.noConsole, alloc);
 
-        j.AddMember("enable-blockexplorer", config.enableBlockExplorer, alloc);
-        j.AddMember("enable-blockexplorer-detailed", config.enableBlockExplorerDetailed, alloc);
-        j.AddMember("enable-mining", config.enableMining, alloc);
+        j.AddMember("daemon-mode", config.daemonMode, alloc);
         j.AddMember("enable-cors", config.enableCors, alloc);
         j.AddMember("enable-trtl-api", config.enableTrtlRpc, alloc);
         j.AddMember("fee-address", config.feeAddress, alloc);
@@ -487,14 +484,13 @@ namespace DaemonConfig
             j.AddMember("seed-node", arr, alloc);
         }
 
-        j.AddMember("db-enable-level-db", config.enableLevelDB, alloc);
         j.AddMember("db-enable-compression", config.enableDbCompression, alloc);
         j.AddMember("db-max-open-files", config.dbMaxOpenFiles, alloc);
         j.AddMember("db-read-buffer-size", config.dbReadCacheSizeMB, alloc);
         j.AddMember("db-threads", config.dbThreads, alloc);
         j.AddMember("db-write-buffer-size", config.dbWriteBufferSizeMB, alloc);
-        j.AddMember("db-max-file-size", config.dbMaxFileSizeMB, alloc);
-        j.AddMember("db-use-experimental-serializer", config.dbUseExperimentalSerializer, alloc);
+        j.AddMember("prune", config.prune, alloc);
+        j.AddMember("prune-depth", config.pruneDepth, alloc);
 
         j.AddMember("transaction-validation-threads", config.transactionValidationThreads, alloc);
 

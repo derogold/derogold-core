@@ -35,6 +35,7 @@ namespace CryptoNote
             readCacheSize(readCacheMB * 1024 * 1024),
             maxFileSize(maxFileSizeMB * 1024 * 1024),
             compressionEnabled(enableDbCompression),
+            syncTrimmed(false),
             useExperimentalSerializer(useExperimentalSerializer)
         {
         }

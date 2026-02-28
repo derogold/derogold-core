@@ -23,7 +23,6 @@
 #include "cryptonotecore/DBUtils.h"
 #include "cryptonotecore/DatabaseBlockchainCache.h"
 #include "cryptonotecore/DatabaseBlockchainCacheFactory.h"
-#include "cryptonotecore/LevelDBWrapper.h"
 #include "cryptonotecore/RocksDBWrapper.h"
 #include "cryptonoteprotocol/CryptoNoteProtocolHandler.h"
 #include "logger/Logger.h"
@@ -153,7 +152,6 @@ int main(int argc, char *argv[])
         std::vector removablePaths = {
             fs::path(config.dataDirectory) / CryptoNote::parameters::P2P_NET_DATA_FILENAME,
             fs::path(config.dataDirectory) / RocksDBWrapper::DB_NAME,
-            fs::path(config.dataDirectory) / LevelDBWrapper::DB_NAME,
         };
 
         for (const auto &path : removablePaths)
@@ -256,7 +254,8 @@ int main(int argc, char *argv[])
 
         // create objects and link them
         CryptoNote::CurrencyBuilder currencyBuilder(logManager);
-        currencyBuilder.isBlockexplorer(config.enableBlockExplorer);
+        const bool explorerMode = config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER;
+        currencyBuilder.isBlockexplorer(explorerMode);
 
         try
         {
@@ -313,9 +312,9 @@ int main(int argc, char *argv[])
                                 config.dbMaxOpenFiles,
                                 config.dbWriteBufferSizeMB,
                                 config.dbReadCacheSizeMB,
-                                config.dbMaxFileSizeMB,
+                                CryptoNote::LEVELDB_MAX_FILE_SIZE_MB,
                                 config.enableDbCompression,
-                                config.dbUseExperimentalSerializer);
+                                false);
 
         if (!Tools::create_directories_if_necessary(dbConfig.dataDir))
         {
@@ -324,14 +323,7 @@ int main(int argc, char *argv[])
 
         std::shared_ptr<IDataBase> database;
 
-        if (config.enableLevelDB)
-        {
-            database = std::make_shared<LevelDBWrapper>(logManager, dbConfig);
-        }
-        else
-        {
-            database = std::make_shared<RocksDBWrapper>(logManager, dbConfig);
-        }
+        database = std::make_shared<RocksDBWrapper>(logManager, dbConfig);
 
         if (config.dbOptimize)
         {
@@ -415,34 +407,6 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (config.exportCheckPoints)
-        {
-            logger(INFO) << "Exporting checkpoints...";
-            std::string checkpointFileName = "checkpoints.csv";
-
-            std::fstream out(checkpointFileName, std::fstream::out | std::fstream::trunc);
-
-            auto topHeight = ccore->getTopBlockIndex();
-
-            for (uint32_t i = 0; i <= topHeight; i++)
-            {
-                auto hash = ccore->getBlockHashByIndex(i);
-                out << std::to_string(i) << "," << Common::podToHex(hash) << std::endl;
-
-                if (i % 1000 == 0)
-                {
-                    logger(INFO) << "Exporting checkpoints (" << std::to_string(i) << "/" << std::to_string(topHeight)
-                                 << ")";
-                }
-            }
-
-            out.close();
-
-            logger(INFO) << "Export completed.";
-
-            exit(0);
-        }
-
         /* If we were told to rewind the blockchain to a certain height
            we will remove blocks until we're back at the height specified */
         if (config.rewindToHeight > 0)
@@ -452,21 +416,18 @@ int main(int argc, char *argv[])
             ccore->rewind(config.rewindToHeight);
         }
 
+        if (config.prune)
+        {
+            logger(INFO) << "Prune mode requested with depth " << config.pruneDepth
+                         << ". Raw block pruning is currently disabled to preserve wallet sync-from-0 compatibility.";
+        }
+
         const auto cprotocol =
             std::make_shared<CryptoNote::CryptoNoteProtocolHandler>(currency, dispatcher, *ccore, nullptr, logManager);
 
         const auto p2psrv = std::make_shared<CryptoNote::NodeServer>(dispatcher, *cprotocol, logManager);
 
-        RpcMode rpcMode = RpcMode::Default;
-
-        if (config.enableBlockExplorerDetailed)
-        {
-            rpcMode = RpcMode::AllMethodsEnabled;
-        }
-        else if (config.enableBlockExplorer)
-        {
-            rpcMode = RpcMode::BlockExplorerEnabled;
-        }
+        RpcMode rpcMode = explorerMode ? RpcMode::BlockExplorerEnabled : RpcMode::Default;
 
         RpcServer rpcServer(config.rpcPort,
                             config.rpcInterface,

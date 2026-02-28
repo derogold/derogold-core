@@ -14,6 +14,7 @@
 #include <rocksdb/statistics.h>
 #include <rocksdb/table.h>
 #include <rocksdb/utilities/options_util.h>
+#include <algorithm>
 #include <utility>
 #include <thread>
 
@@ -274,25 +275,22 @@ namespace CryptoNote
 
         rocksdb::ColumnFamilyOptions cfOptions;
 
-        // sets the size of a single memtable. Once memtable exceeds this size, it is marked immutable and a new one is
-        // created.
-        cfOptions.write_buffer_size = config.writeBufferSize / 4;
+        // Set size of a single memtable.
+        cfOptions.write_buffer_size = static_cast<size_t>(config.writeBufferSize);
         // merge two memtables when flushing to L0
         cfOptions.min_write_buffer_number_to_merge = 2;
-        // this means we'll use 50% extra memory in the worst case, but will reduce
-        // write stalls.
-        cfOptions.max_write_buffer_number = 4;
-        // start flushing L0->L1 as soon as possible. each file on level0 is
-        // (memtable_memory_budget / 2). This will flush level 0 when it's bigger than
-        // memtable_memory_budget.
-        cfOptions.level0_file_num_compaction_trigger = 2;
+        // Reduce write stalls by allowing more immutable memtables.
+        cfOptions.max_write_buffer_number = 6;
+        // Delay compaction trigger slightly to improve write throughput.
+        cfOptions.level0_file_num_compaction_trigger = 20;
+        cfOptions.level0_slowdown_writes_trigger = 30;
+        cfOptions.level0_stop_writes_trigger = 40;
 
-        // doesn't really matter much, but we don't want to create too many files
-        cfOptions.target_file_size_base = config.writeBufferSize / 4;
-        // make Level1 size equal to Level0 size, so that L0->L1 compactions are fast
-        cfOptions.max_bytes_for_level_base = config.writeBufferSize;
+        cfOptions.target_file_size_base = std::max<uint64_t>(config.writeBufferSize / 2, 8ULL * 1024 * 1024);
+        cfOptions.max_bytes_for_level_base = std::max<uint64_t>(config.writeBufferSize * 4, 64ULL * 1024 * 1024);
 
-        cfOptions.num_levels = 10;
+        cfOptions.num_levels = 7;
+        cfOptions.target_file_size_multiplier = 2;
 
         // level style compaction
         cfOptions.compaction_style = rocksdb::kCompactionStyleLevel;
@@ -305,6 +303,8 @@ namespace CryptoNote
             // don't compress l0 & l1
             cfOptions.compression_per_level[i] = i < 2 ? rocksdb::kNoCompression : compressionLevel;
         }
+
+        cfOptions.bottommost_compression = compressionLevel;
 
         rocksdb::BlockBasedTableOptions bbtOptions;
         bbtOptions.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
@@ -335,11 +335,14 @@ namespace CryptoNote
 
         rocksdb::ColumnFamilyOptions cfOptions;
         cfOptions.OptimizeLevelStyleCompaction();
+        cfOptions.compression_per_level.resize(cfOptions.num_levels);
+        const auto compressionLevel = config.compressionEnabled ? rocksdb::kZSTD : rocksdb::kNoCompression;
 
         for (int i = 0; i < cfOptions.num_levels; ++i)
         {
-            cfOptions.compression_per_level[i] = i < 2 ? rocksdb::kNoCompression : rocksdb::kZSTD;
+            cfOptions.compression_per_level[i] = i < 2 ? rocksdb::kNoCompression : compressionLevel;
         }
+        cfOptions.bottommost_compression = compressionLevel;
 
         rocksdb::BlockBasedTableOptions bbtOptions;
         bbtOptions.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
