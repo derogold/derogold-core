@@ -345,8 +345,6 @@ bool DaemonCommandsHandler::print_pool_sh(const std::vector<std::string> &args)
 {
     const auto pool = m_core.getPoolTransactions();
 
-    const uint64_t height = m_core.getTopBlockIndex();
-
     if (pool.size() == 0)
     {
         std::cout << InformationMsg("\nPool state: ") << SuccessMsg("Empty.") << std::endl;
@@ -534,15 +532,7 @@ bool DaemonCommandsHandler::ban(const std::vector<std::string> &args)
         m_bannedHosts[args[1]] = now + std::chrono::seconds(banSeconds);
         std::cout << InformationMsg("Banned host: ") << SuccessMsg(args[1]) << InformationMsg(" for ")
                   << SuccessMsg(std::to_string(banSeconds) + "s") << std::endl;
-
-        m_srv.for_each_connection([&](CryptoNote::CryptoNoteConnectionContext &ctx, uint64_t)
-                                  {
-                                      const std::string remoteIp = Common::ipAddressToString(ctx.m_remote_ip);
-                                      if (remoteIp == args[1])
-                                      {
-                                          ctx.m_state = CryptoNote::CryptoNoteConnectionContext::state_shutdown;
-                                      }
-                                  });
+        std::cout << InformationMsg("Note: active connection drop for bans is not exposed in this build.") << std::endl;
 
         return true;
     }
