@@ -78,6 +78,8 @@ namespace DaemonConfig
             ("os-version", "Output Operating System version information.", cxxopts::value<bool>(config.osVersion))
             ("resync", "Forces the daemon to delete the blockchain data and start resyncing.", cxxopts::value<bool>(config.resync))
             ("prune", "Enable pruned-node mode.", cxxopts::value<bool>(config.prune)->default_value(config.prune ? "true" : "false"))
+            ("background-prune", "Enable periodic background prune task.",
+             cxxopts::value<bool>(config.backgroundPrune)->default_value(config.backgroundPrune ? "true" : "false"))
             ("prune-depth", "When prune mode is enabled, retain at least this many recent blocks locally.",
              cxxopts::value<uint32_t>(config.pruneDepth), "<blocks>")
             ("rewind-to-height", "Rewinds the local blockchain cache to the specified height.", cxxopts::value<uint32_t>(config.rewindToHeight), "<height>");
@@ -407,6 +409,11 @@ namespace DaemonConfig
             config.prune = j["prune"].GetBool();
         }
 
+        if (j.HasMember("background-prune"))
+        {
+            config.backgroundPrune = j["background-prune"].GetBool();
+        }
+
         if (j.HasMember("prune-depth"))
         {
             config.pruneDepth = clampPruneDepth(j["prune-depth"].GetUint(), "config file");
@@ -490,6 +497,7 @@ namespace DaemonConfig
         j.AddMember("db-threads", config.dbThreads, alloc);
         j.AddMember("db-write-buffer-size", config.dbWriteBufferSizeMB, alloc);
         j.AddMember("prune", config.prune, alloc);
+        j.AddMember("background-prune", config.backgroundPrune, alloc);
         j.AddMember("prune-depth", config.pruneDepth, alloc);
 
         j.AddMember("transaction-validation-threads", config.transactionValidationThreads, alloc);

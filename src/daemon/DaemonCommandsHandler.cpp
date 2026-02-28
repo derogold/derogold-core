@@ -435,6 +435,10 @@ bool DaemonCommandsHandler::status(const std::vector<std::string> &args)
     statusTable.emplace_back("Next Fork", Utilities::get_fork_time(networkHeight, upgradeHeights));
     statusTable.emplace_back("Transaction Pool Size", std::to_string(m_core.getPoolTransactionHashes().size()));
     statusTable.emplace_back("Alternative Block Count", std::to_string(m_core.getAlternativeBlockCount()));
+    statusTable.emplace_back(
+        "Prune Mode",
+        m_config.prune ? ("Enabled (depth " + std::to_string(m_config.pruneDepth) + ")") : "Disabled");
+    statusTable.emplace_back("Background Prune", m_config.backgroundPrune ? "Enabled (async)" : "Disabled");
     statusTable.emplace_back("DB Engine", "RocksDB");
     statusTable.emplace_back("Version", PROJECT_VERSION_WITH_BUILD);
 
@@ -631,6 +635,8 @@ bool DaemonCommandsHandler::prune_status(const std::vector<std::string> &args)
     const uint64_t pruneFloor = height > pruneDepth ? height - pruneDepth : 0;
 
     std::cout << InformationMsg("Pruned Node: ") << SuccessMsg(m_config.prune ? "Yes" : "No") << std::endl;
+    std::cout << InformationMsg("Background Prune Task: ")
+              << SuccessMsg(m_config.backgroundPrune ? "Enabled (async)" : "Disabled") << std::endl;
     std::cout << InformationMsg("Prune Depth: ") << SuccessMsg(pruneDepth) << std::endl;
     std::cout << InformationMsg("Approx Prune Floor Height: ") << SuccessMsg(pruneFloor) << std::endl;
     return true;

@@ -73,6 +73,7 @@ namespace DaemonConfig
         bool dbOptimize = false;
 
         bool prune = false;
+        bool backgroundPrune = true;
         uint32_t pruneDepth = DEFAULT_PRUNE_DEPTH;
 
         uint32_t transactionValidationThreads = std::thread::hardware_concurrency();

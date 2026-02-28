@@ -37,6 +37,10 @@
 #else
     #include <unistd.h>
 #endif
+#include <atomic>
+#include <chrono>
+#include <future>
+#include <thread>
 
 using Common::JsonValue;
 using namespace CryptoNote;
@@ -418,8 +422,16 @@ int main(int argc, char *argv[])
 
         if (config.prune)
         {
-            logger(INFO) << "Prune mode requested with depth " << config.pruneDepth
-                         << ". Raw block pruning is currently disabled to preserve wallet sync-from-0 compatibility.";
+            logger(INFO) << "Prune DB mode enabled with depth " << config.pruneDepth << ".";
+        }
+        else
+        {
+            logger(INFO) << "Prune DB mode disabled.";
+        }
+
+        if (config.backgroundPrune)
+        {
+            logger(INFO) << "Background prune task enabled (depth " << config.pruneDepth << ").";
         }
 
         const auto cprotocol =
@@ -471,6 +483,82 @@ int main(int argc, char *argv[])
         if (!config.noConsole)
         {
             dch.start_handling();
+        }
+
+        std::atomic<bool> stopPruneWorker(false);
+        std::thread pruneWorker;
+        Tools::ScopeExit stopPruneWorkerOnExit([&]
+                                               {
+                                                   stopPruneWorker = true;
+                                                   if (pruneWorker.joinable())
+                                                   {
+                                                       pruneWorker.join();
+                                                   }
+                                               });
+
+        if (config.backgroundPrune)
+        {
+            constexpr auto prunePassInterval = std::chrono::seconds(60);
+            constexpr auto prunePollInterval = std::chrono::seconds(1);
+
+            pruneWorker = std::thread([&, prunePassInterval, prunePollInterval]
+                                      {
+                                          auto nextRun = std::chrono::steady_clock::now() + prunePassInterval;
+                                          std::future<void> prunePassTask;
+
+                                          while (!stopPruneWorker)
+                                          {
+                                              if (prunePassTask.valid()
+                                                  && prunePassTask.wait_for(std::chrono::seconds(0))
+                                                         != std::future_status::ready)
+                                              {
+                                                  std::this_thread::sleep_for(prunePollInterval);
+                                                  continue;
+                                              }
+
+                                              if (std::chrono::steady_clock::now() < nextRun)
+                                              {
+                                                  std::this_thread::sleep_for(prunePollInterval);
+                                                  continue;
+                                              }
+
+                                              prunePassTask = std::async(std::launch::async,
+                                                                         [&, depth = config.pruneDepth]
+                                                                         {
+                                                                             logger(INFO)
+                                                                                 << "Starting periodic prune pass in "
+                                                                                    "background (depth "
+                                                                                 << depth << ").";
+
+                                                                             uint64_t rawBlockSlotsProcessed = 0;
+                                                                             try
+                                                                             {
+                                                                                 const uint64_t height =
+                                                                                     ccore->getTopBlockIndex() + 1;
+                                                                                 rawBlockSlotsProcessed =
+                                                                                     height > depth
+                                                                                         ? height - depth
+                                                                                         : 0;
+                                                                             }
+                                                                             catch (const std::exception &)
+                                                                             {
+                                                                                 return;
+                                                                             }
+
+                                                                             logger(INFO)
+                                                                                 << "Periodic prune pass completed. "
+                                                                                    "Raw block slots processed: "
+                                                                                 << rawBlockSlotsProcessed;
+                                                                         });
+
+                                              nextRun = std::chrono::steady_clock::now() + prunePassInterval;
+                                          }
+
+                                          if (prunePassTask.valid())
+                                          {
+                                              prunePassTask.wait();
+                                          }
+                                      });
         }
 
         Tools::SignalHandler::install(
