@@ -19,6 +19,8 @@
 #include <config/CryptoNoteConfig.h>
 #include <config/WalletConfig.h>
 #include <future>
+#include <cmath>
+#include <iomanip>
 #include <utility>
 #include <serialization/SerializationTools.h>
 #include <system/Dispatcher.h>
@@ -67,6 +69,23 @@ namespace CryptoNote
             }
 
             return rawBlocks;
+        }
+
+        std::string formatEta(uint64_t seconds)
+        {
+            const uint64_t days = seconds / 86400;
+            seconds %= 86400;
+            const uint64_t hours = seconds / 3600;
+            seconds %= 3600;
+            const uint64_t minutes = seconds / 60;
+            seconds %= 60;
+
+            std::ostringstream ss;
+            ss << "d" << days
+               << ".h" << std::setw(2) << std::setfill('0') << hours
+               << ".m" << std::setw(2) << std::setfill('0') << minutes
+               << ".s" << std::setw(2) << std::setfill('0') << seconds;
+            return ss.str();
         }
 
     } // namespace
@@ -331,65 +350,52 @@ namespace CryptoNote
             /* Find the difference between the remote and the local height */
             int64_t diff = static_cast<int64_t>(remoteHeight) - static_cast<int64_t>(currentHeight);
 
-            uint64_t days;
-            uint64_t blocksWithDiffV3Remaining = 0;
-            uint64_t blocksWithDiffV2Remaining = 0;
-
-            /* We have passed V3 height. Lets figure out how many v3 diff blocks we still need to sync. */
-            if (remoteHeight >= CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT)
-            {
-                /* Take the max of the current height or the target height. If our current height is less than the diff v3 target height,
-                 * we don't want to include those blocks, as they are not v3 ones. */
-                blocksWithDiffV3Remaining = remoteHeight - std::max(currentHeight, CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT);
-            }
-
-            /* We have passed V3 height. Lets figure out how many v3 diff blocks we still need to sync. */
-            if (remoteHeight >= CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT)
-            {
-                /* Find number of blocks between max(current height / v2 height) and v3 height */
-                blocksWithDiffV2Remaining = remoteHeight - blocksWithDiffV3Remaining - std::max(currentHeight, CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT);
-            }
-
-            const uint64_t blocksWithDiffV1Remaining = remoteHeight - blocksWithDiffV3Remaining - blocksWithDiffV2Remaining - currentHeight;
-
-            days = blocksWithDiffV3Remaining / (24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V3);
-            days += blocksWithDiffV2Remaining / (24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V2);
-            days += blocksWithDiffV1Remaining / (24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET);
-
-            std::stringstream ss;
-
-            ss << "Your " << CRYPTONOTE_NAME << " node is syncing with the network ";
-
-            /* We're behind the remote node */
             if (diff >= 0)
             {
-                ss << "(" << Utilities::get_sync_percentage(currentHeight, remoteHeight) << "% complete) ";
+                const auto now = std::chrono::steady_clock::now();
 
-                ss << "You are " << diff << " blocks (" << days << " days) behind ";
+                if (!m_syncProgressStarted || currentHeight < m_syncStartHeight)
+                {
+                    m_syncProgressStarted = true;
+                    m_syncStartHeight = currentHeight;
+                    m_syncStartTime = now;
+                    m_lastSyncProgressLog = std::chrono::steady_clock::time_point {};
+                    m_lastSyncLoggedHeight = 0;
+                }
+
+                const bool syncAdvancedSinceLastLog = currentHeight > m_lastSyncLoggedHeight;
+                const bool intervalElapsed =
+                    m_lastSyncProgressLog.time_since_epoch().count() == 0
+                    || now - m_lastSyncProgressLog >= std::chrono::seconds(5);
+
+                if (syncAdvancedSinceLastLog && intervalElapsed)
+                {
+                    const uint64_t elapsedSeconds = std::max<uint64_t>(
+                        1,
+                        static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::seconds>(now - m_syncStartTime).count()));
+                    const uint64_t progressed = currentHeight > m_syncStartHeight ? currentHeight - m_syncStartHeight : 0;
+                    const double avgBlocksPerMinute = (static_cast<double>(progressed) * 60.0) / elapsedSeconds;
+                    const uint64_t remaining = remoteHeight > currentHeight ? remoteHeight - currentHeight : 0;
+                    const uint64_t etaSeconds =
+                        avgBlocksPerMinute > 0.01
+                            ? static_cast<uint64_t>(std::llround((static_cast<double>(remaining) * 60.0) / avgBlocksPerMinute))
+                            : 0;
+
+                    logger(Logging::INFO)
+                        << "Sync progress: " << Utilities::get_sync_percentage(currentHeight, remoteHeight) << "% ("
+                        << currentHeight << "/" << remoteHeight << "), avg "
+                        << static_cast<uint64_t>(std::llround(avgBlocksPerMinute)) << " blk/min, eta "
+                        << formatEta(etaSeconds);
+
+                    m_lastSyncProgressLog = now;
+                    m_lastSyncLoggedHeight = currentHeight;
+                }
             }
-            /* We're ahead of the remote node, no need to print percentages */
             else
             {
-                ss << "You are " << std::abs(diff) << " blocks (" << days << " days) ahead ";
+                logger(Logging::TRACE) << context << "Node is ahead of this peer by " << std::abs(diff) << " blocks";
             }
-
-            ss << "the current peer you're connected to. ";
-
-            auto logLevel = Logging::TRACE;
-            /* Log at different levels depending upon if we're ahead, behind, and if it's
-              a newly formed connection */
-            if (diff >= 0)
-            {
-                if (is_initial)
-                {
-                    logLevel = Logging::INFO;
-                }
-                else
-                {
-                    logLevel = Logging::DEBUGGING;
-                }
-            }
-            logger(logLevel, Logging::BRIGHT_GREEN) << context << ss.str();
 
             logger(Logging::DEBUGGING) << "Remote top block height: " << hshd.current_height << ", id: " << hshd.top_id;
             // let the socket to send response to handshake, but request callback, to let send request data after
@@ -1026,6 +1032,12 @@ namespace CryptoNote
 
     bool CryptoNoteProtocolHandler::on_connection_synchronized()
     {
+        m_syncProgressStarted = false;
+        m_syncStartHeight = 0;
+        m_syncStartTime = std::chrono::steady_clock::time_point {};
+        m_lastSyncProgressLog = std::chrono::steady_clock::time_point {};
+        m_lastSyncLoggedHeight = 0;
+
         bool val_expected = false;
         if (m_synchronized.compare_exchange_strong(val_expected, true))
         {

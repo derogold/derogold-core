@@ -17,6 +17,7 @@
 #include "p2p/P2pProtocolDefinitions.h"
 
 #include <atomic>
+#include <chrono>
 #include <common/ObserverManager.h>
 #include <logging/LoggerRef.h>
 
@@ -187,5 +188,11 @@ namespace CryptoNote
         std::atomic<size_t> m_peersCount;
 
         Tools::ObserverManager<ICryptoNoteProtocolObserver> m_observerManager;
+
+        bool m_syncProgressStarted = false;
+        uint64_t m_syncStartHeight = 0;
+        std::chrono::steady_clock::time_point m_syncStartTime {};
+        std::chrono::steady_clock::time_point m_lastSyncProgressLog {};
+        uint64_t m_lastSyncLoggedHeight = 0;
     };
 } // namespace CryptoNote
