@@ -32,6 +32,31 @@
 namespace
 {
     namespace fs = std::filesystem;
+    constexpr uint64_t AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS = 60;
+    constexpr uint64_t AUTO_COMPACTION_CHECK_INTERVAL_SLOW_SECONDS = 30 * 60;
+    constexpr uint64_t AUTO_COMPACTION_NEAR_SYNC_LAG_BLOCKS = 2;
+    constexpr uint64_t AUTO_COMPACTION_RESYNC_LAG_BLOCKS = 20;
+    constexpr uint32_t AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED = 3;
+    constexpr uint64_t AUTO_COMPACTION_MIN_GAP_BLOCKS = 10080;
+
+    std::string format_epoch(uint64_t epochSeconds)
+    {
+        if (epochSeconds == 0)
+        {
+            return "n/a";
+        }
+
+        const std::time_t t = static_cast<std::time_t>(epochSeconds);
+        std::tm tm {};
+#ifdef _WIN32
+        localtime_s(&tm, &t);
+#else
+        localtime_r(&t, &tm);
+#endif
+        std::ostringstream out;
+        out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+        return out.str();
+    }
 
     template<typename T> bool print_as_json(const T &obj)
     {
@@ -151,6 +176,19 @@ DaemonCommandsHandler::DaemonCommandsHandler(
         [this](const std::vector<std::string> &args) { return status(args); },
         "Show daemon status"
     );
+
+    m_compactDbSchedulerCheckIntervalSeconds.store(AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS);
+    m_stopCompactDbScheduler = false;
+    m_compactDbSchedulerThread = std::thread([this] { compact_db_scheduler_loop(); });
+}
+
+DaemonCommandsHandler::~DaemonCommandsHandler()
+{
+    m_stopCompactDbScheduler = true;
+    if (m_compactDbSchedulerThread.joinable())
+    {
+        m_compactDbSchedulerThread.join();
+    }
 }
 
 //--------------------------------------------------------------------------------
@@ -570,42 +608,10 @@ bool DaemonCommandsHandler::ban(const std::vector<std::string> &args)
 
 bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
 {
-    auto refreshCompactionState = [this]()
     {
-        if (!m_compactDbTask.valid())
-        {
-            return;
-        }
-
-        if (m_compactDbTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-        {
-            return;
-        }
-
-        try
-        {
-            m_compactDbTask.get();
-            m_compactDbLastSuccess = true;
-            std::lock_guard<std::mutex> lock(m_compactDbMutex);
-            m_compactDbLastError.clear();
-        }
-        catch (const std::exception &e)
-        {
-            m_compactDbLastSuccess = false;
-            std::lock_guard<std::mutex> lock(m_compactDbMutex);
-            m_compactDbLastError = e.what();
-        }
-        catch (...)
-        {
-            m_compactDbLastSuccess = false;
-            std::lock_guard<std::mutex> lock(m_compactDbMutex);
-            m_compactDbLastError = "Unknown compaction error";
-        }
-
-        m_compactDbRunning = false;
-    };
-
-    refreshCompactionState();
+        std::lock_guard<std::mutex> lock(m_compactDbMutex);
+        refresh_compaction_state_locked();
+    }
 
     std::string action = args.empty() ? "status" : args[0];
     std::transform(action.begin(), action.end(), action.begin(), [](unsigned char c)
@@ -613,6 +619,9 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
 
     if (action == "status")
     {
+        std::lock_guard<std::mutex> lock(m_compactDbMutex);
+        refresh_compaction_state_locked();
+
         if (m_compactDbRunning)
         {
             const auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
@@ -621,6 +630,9 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
             std::cout << InformationMsg("DB compaction status: ") << WarningMsg("running")
                       << InformationMsg(" (elapsed ") << SuccessMsg(std::to_string(elapsedSeconds) + "s")
                       << InformationMsg(")") << std::endl;
+            std::cout << InformationMsg("Started at: ") << SuccessMsg(format_epoch(m_compactDbStartedAtEpoch))
+                      << InformationMsg(", height ") << SuccessMsg(std::to_string(m_compactDbStartedAtHeight))
+                      << std::endl;
             return true;
         }
 
@@ -649,35 +661,31 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
             }
             std::cout << std::endl;
         }
+
+        std::cout << InformationMsg("Last start: ") << SuccessMsg(format_epoch(m_compactDbStartedAtEpoch))
+                  << InformationMsg(", height ") << SuccessMsg(std::to_string(m_compactDbStartedAtHeight))
+                  << std::endl;
+        std::cout << InformationMsg("Last finish: ") << SuccessMsg(format_epoch(m_compactDbFinishedAtEpoch))
+                  << InformationMsg(", height ") << SuccessMsg(std::to_string(m_compactDbFinishedAtHeight))
+                  << std::endl;
+        std::cout << InformationMsg("Auto scheduler: ")
+                  << SuccessMsg(
+                         "enabled, interval "
+                         + std::to_string(m_compactDbSchedulerCheckIntervalSeconds.load()) + "s")
+                  << std::endl;
         return true;
     }
 
     if (action == "start")
     {
-        if (m_compactDbRunning)
+        std::lock_guard<std::mutex> lock(m_compactDbMutex);
+        refresh_compaction_state_locked();
+
+        if (!start_compaction_locked("manual console request"))
         {
             std::cout << WarningMsg("DB compaction is already running.") << std::endl;
             return true;
         }
-
-        m_compactDbHasRun = true;
-        m_compactDbLastSuccess = true;
-        {
-            std::lock_guard<std::mutex> lock(m_compactDbMutex);
-            m_compactDbLastError.clear();
-        }
-        m_compactDbStart = std::chrono::steady_clock::now();
-        m_compactDbRunning = true;
-
-        m_compactDbTask = std::async(std::launch::async,
-                                     [this]
-                                     {
-                                         if (!m_database)
-                                         {
-                                             throw std::runtime_error("Database handle is not available");
-                                         }
-                                         m_database->optimize();
-                                     });
 
         std::cout << SuccessMsg("Started DB compaction in background.") << std::endl;
         return true;
@@ -697,7 +705,10 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
             m_compactDbTask.wait();
         }
 
-        refreshCompactionState();
+        {
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            refresh_compaction_state_locked();
+        }
 
         if (!m_compactDbRunning && m_compactDbLastSuccess)
         {
@@ -721,6 +732,9 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
 
     if (action == "stop")
     {
+        std::lock_guard<std::mutex> lock(m_compactDbMutex);
+        refresh_compaction_state_locked();
+
         if (!m_compactDbRunning)
         {
             std::cout << InformationMsg("No running DB compaction job.") << std::endl;
@@ -736,6 +750,8 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
         if (m_database->cancelOptimize())
         {
             std::cout << InformationMsg("Stop requested for DB compaction.") << std::endl;
+            m_compactDbNearSyncStreak = 0;
+            m_compactDbFinishedAtHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
         }
         else
         {
@@ -747,6 +763,136 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
 
     std::cout << "usage: compact_db [start|status|wait|stop]" << std::endl;
     return true;
+}
+
+void DaemonCommandsHandler::refresh_compaction_state_locked()
+{
+    if (!m_compactDbTask.valid())
+    {
+        return;
+    }
+
+    if (m_compactDbTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    {
+        return;
+    }
+
+    try
+    {
+        m_compactDbTask.get();
+        m_compactDbLastSuccess = true;
+        m_compactDbLastError.clear();
+    }
+    catch (const std::exception &e)
+    {
+        m_compactDbLastSuccess = false;
+        m_compactDbLastError = e.what();
+    }
+    catch (...)
+    {
+        m_compactDbLastSuccess = false;
+        m_compactDbLastError = "Unknown compaction error";
+    }
+
+    m_compactDbRunning = false;
+    m_compactDbFinishedAtEpoch = static_cast<uint64_t>(std::time(nullptr));
+    m_compactDbFinishedAtHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
+}
+
+bool DaemonCommandsHandler::start_compaction_locked(const std::string &reason)
+{
+    if (m_compactDbRunning)
+    {
+        return false;
+    }
+
+    m_compactDbHasRun = true;
+    m_compactDbLastSuccess = true;
+    m_compactDbLastError.clear();
+    m_compactDbStart = std::chrono::steady_clock::now();
+    m_compactDbStartedAtEpoch = static_cast<uint64_t>(std::time(nullptr));
+    m_compactDbStartedAtHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
+    m_compactDbRunning = true;
+
+    logger(Logging::INFO) << "Starting DB compaction (" << reason << ").";
+    m_compactDbTask = std::async(std::launch::async,
+                                 [this]
+                                 {
+                                     if (!m_database)
+                                     {
+                                         throw std::runtime_error("Database handle is not available");
+                                     }
+                                     m_database->optimize();
+                                 });
+    return true;
+}
+
+void DaemonCommandsHandler::compact_db_scheduler_loop()
+{
+    while (!m_stopCompactDbScheduler)
+    {
+        const uint64_t sleepSeconds = m_compactDbSchedulerCheckIntervalSeconds.load();
+        for (uint64_t i = 0; i < sleepSeconds && !m_stopCompactDbScheduler; ++i)
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (m_stopCompactDbScheduler)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(m_compactDbMutex);
+        refresh_compaction_state_locked();
+
+        const uint64_t localHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
+        const uint64_t networkHeight = std::max<uint64_t>(1, m_syncManager->getBlockchainHeight());
+        const uint64_t lag = networkHeight > localHeight ? networkHeight - localHeight : 0;
+
+        if (lag <= AUTO_COMPACTION_NEAR_SYNC_LAG_BLOCKS)
+        {
+            m_compactDbNearSyncStreak += 1;
+        }
+        else if (lag >= AUTO_COMPACTION_RESYNC_LAG_BLOCKS)
+        {
+            m_compactDbNearSyncStreak = 0;
+        }
+
+        const uint64_t desiredInterval =
+            m_compactDbNearSyncStreak >= AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED
+                ? AUTO_COMPACTION_CHECK_INTERVAL_SLOW_SECONDS
+                : AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS;
+
+        if (desiredInterval != m_compactDbSchedulerCheckIntervalSeconds.load())
+        {
+            m_compactDbSchedulerCheckIntervalSeconds.store(desiredInterval);
+            logger(Logging::INFO)
+                << "Adaptive compact_db scheduler interval switched to "
+                << m_compactDbSchedulerCheckIntervalSeconds.load() << "s (lag " << lag << ").";
+        }
+
+        if (m_compactDbRunning)
+        {
+            continue;
+        }
+
+        if (m_compactDbNearSyncStreak < AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED)
+        {
+            continue;
+        }
+
+        const uint64_t lastActivityHeight = std::max(m_compactDbStartedAtHeight, m_compactDbFinishedAtHeight);
+        if (lastActivityHeight != 0 && localHeight > lastActivityHeight
+            && (localHeight - lastActivityHeight) < AUTO_COMPACTION_MIN_GAP_BLOCKS)
+        {
+            continue;
+        }
+
+        if (start_compaction_locked("automatic scheduler"))
+        {
+            logger(Logging::INFO) << "Automatic periodic DB compaction started in background.";
+        }
+    }
 }
 
 bool DaemonCommandsHandler::db_status(const std::vector<std::string> &args)
