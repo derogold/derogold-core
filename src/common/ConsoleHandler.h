@@ -41,6 +41,8 @@ namespace Common
 
         void unpause();
 
+        void setPrompt(const std::string &prompt);
+
       private:
         void consoleThread();
 
@@ -51,6 +53,8 @@ namespace Common
         std::thread m_thread;
 
         BlockingQueue<std::string> m_queue;
+
+        std::string m_prompt;
     };
 
     class ConsoleHandler

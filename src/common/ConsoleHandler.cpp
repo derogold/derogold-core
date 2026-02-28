@@ -22,6 +22,7 @@
 #endif
 
 #include <boost/algorithm/string.hpp>
+#include <linenoise.hpp>
 
 using Common::Console::Color;
 
@@ -70,6 +71,11 @@ namespace Common
         start();
     }
 
+    void AsyncConsoleReader::setPrompt(const std::string &prompt)
+    {
+        m_prompt = prompt;
+    }
+
     void AsyncConsoleReader::stop()
     {
         if (m_stop)
@@ -81,6 +87,8 @@ namespace Common
         m_queue.close();
 #ifdef _WIN32
         ::CloseHandle(::GetStdHandle(STD_INPUT_HANDLE));
+#else
+        ::close(STDIN_FILENO);
 #endif
 
         if (m_thread.joinable())
@@ -98,13 +106,21 @@ namespace Common
 
     void AsyncConsoleReader::consoleThread()
     {
-        while (waitInput())
+        linenoise::SetHistoryMaxLen(256);
+
+        while (!m_stop)
         {
             std::string line;
 
-            if (!std::getline(std::cin, line))
+            const bool quit = linenoise::Readline(m_prompt.c_str(), line);
+            if (quit)
             {
                 break;
+            }
+
+            if (!line.empty())
+            {
+                linenoise::AddHistory(line.c_str());
             }
 
             if (!m_queue.push(line))
@@ -163,6 +179,7 @@ namespace Common
     {
         m_prompt = prompt;
         m_promptColor = promptColor;
+        m_consoleReader.setPrompt(prompt);
         m_consoleReader.start();
 
         if (startThread)
@@ -280,22 +297,6 @@ namespace Common
         {
             try
             {
-                if (!m_prompt.empty())
-                {
-                    if (m_promptColor != Color::Default)
-                    {
-                        Console::setTextColor(m_promptColor);
-                    }
-
-                    std::cout << m_prompt;
-                    std::cout.flush();
-
-                    if (m_promptColor != Color::Default)
-                    {
-                        Console::setTextColor(Color::Default);
-                    }
-                }
-
                 if (!m_consoleReader.getline(line))
                 {
                     break;
