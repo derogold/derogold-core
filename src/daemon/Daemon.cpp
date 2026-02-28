@@ -478,7 +478,7 @@ int main(int argc, char *argv[])
             ip = "127.0.0.1";
         }
 
-        DaemonCommandsHandler dch(*ccore, *p2psrv, cprotocol, logManager, ip, port, config);
+        DaemonCommandsHandler dch(*ccore, *p2psrv, cprotocol, logManager, ip, port, database, config);
 
         if (!config.noConsole)
         {

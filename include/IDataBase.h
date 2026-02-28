@@ -80,6 +80,8 @@ namespace CryptoNote
 
         virtual void optimize() = 0;
 
+        virtual bool cancelOptimize() = 0;
+
         [[nodiscard]] virtual const DataBaseConfig &getConfig() const = 0;
     };
 } // namespace CryptoNote

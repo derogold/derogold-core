@@ -10,6 +10,7 @@
 
 #include <boost/format.hpp>
 #include <common/Util.h>
+#include <IDataBase.h>
 #include <cryptonotecore/Core.h>
 #include <cryptonotecore/Currency.h>
 #include <cryptonoteprotocol/CryptoNoteProtocolHandler.h>
@@ -25,6 +26,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace
@@ -66,6 +68,7 @@ DaemonCommandsHandler::DaemonCommandsHandler(
     const std::shared_ptr<Logging::LoggerManager> &log,
     const std::string &ip,
     const uint32_t port,
+    const std::shared_ptr<CryptoNote::IDataBase> &database,
     DaemonConfig::DaemonConfiguration config
 ) :
     m_core(core),
@@ -74,7 +77,8 @@ DaemonCommandsHandler::DaemonCommandsHandler(
     m_rpcServer(ip, static_cast<int>(port)),
     logger(log, "daemon"),
     m_config(std::move(config)),
-    m_logManager(log)
+    m_logManager(log),
+    m_database(database)
 {
     m_consoleHandler
         .setHandler("?", [this](const std::vector<std::string> &args) { return help(args); }, "Show this help");
@@ -90,7 +94,7 @@ DaemonCommandsHandler::DaemonCommandsHandler(
     m_consoleHandler.setHandler(
         "compact_db",
         [this](const std::vector<std::string> &args) { return compact_db(args); },
-        "Manage DB compaction: compact_db [start|status|wait]"
+        "Manage DB compaction: compact_db [start|status|wait|stop]"
     );
     m_consoleHandler.setHandler(
         "db_status",
@@ -566,30 +570,182 @@ bool DaemonCommandsHandler::ban(const std::vector<std::string> &args)
 
 bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
 {
+    auto refreshCompactionState = [this]()
+    {
+        if (!m_compactDbTask.valid())
+        {
+            return;
+        }
+
+        if (m_compactDbTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        {
+            return;
+        }
+
+        try
+        {
+            m_compactDbTask.get();
+            m_compactDbLastSuccess = true;
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            m_compactDbLastError.clear();
+        }
+        catch (const std::exception &e)
+        {
+            m_compactDbLastSuccess = false;
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            m_compactDbLastError = e.what();
+        }
+        catch (...)
+        {
+            m_compactDbLastSuccess = false;
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            m_compactDbLastError = "Unknown compaction error";
+        }
+
+        m_compactDbRunning = false;
+    };
+
+    refreshCompactionState();
+
     std::string action = args.empty() ? "status" : args[0];
     std::transform(action.begin(), action.end(), action.begin(), [](unsigned char c)
                    { return static_cast<char>(std::tolower(c)); });
 
     if (action == "status")
     {
-        std::cout << InformationMsg("DB compaction is available at startup via --db-optimize.") << std::endl;
+        if (m_compactDbRunning)
+        {
+            const auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now() - m_compactDbStart)
+                                            .count();
+            std::cout << InformationMsg("DB compaction status: ") << WarningMsg("running")
+                      << InformationMsg(" (elapsed ") << SuccessMsg(std::to_string(elapsedSeconds) + "s")
+                      << InformationMsg(")") << std::endl;
+            return true;
+        }
+
+        if (!m_compactDbHasRun)
+        {
+            std::cout << InformationMsg("DB compaction status: ") << SuccessMsg("idle") << std::endl;
+            return true;
+        }
+
+        if (m_compactDbLastSuccess)
+        {
+            std::cout << InformationMsg("DB compaction status: ") << SuccessMsg("last run completed") << std::endl;
+        }
+        else
+        {
+            std::string error;
+            {
+                std::lock_guard<std::mutex> lock(m_compactDbMutex);
+                error = m_compactDbLastError;
+            }
+
+            std::cout << InformationMsg("DB compaction status: ") << WarningMsg("last run failed");
+            if (!error.empty())
+            {
+                std::cout << InformationMsg(" (") << WarningMsg(error) << InformationMsg(")");
+            }
+            std::cout << std::endl;
+        }
         return true;
     }
 
     if (action == "start")
     {
-        std::cout << WarningMsg("Live compaction trigger is not exposed in this daemon build. ")
-                  << "Restart with --db-optimize to run full compaction." << std::endl;
+        if (m_compactDbRunning)
+        {
+            std::cout << WarningMsg("DB compaction is already running.") << std::endl;
+            return true;
+        }
+
+        m_compactDbHasRun = true;
+        m_compactDbLastSuccess = true;
+        {
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            m_compactDbLastError.clear();
+        }
+        m_compactDbStart = std::chrono::steady_clock::now();
+        m_compactDbRunning = true;
+
+        m_compactDbTask = std::async(std::launch::async,
+                                     [this]
+                                     {
+                                         if (!m_database)
+                                         {
+                                             throw std::runtime_error("Database handle is not available");
+                                         }
+                                         m_database->optimize();
+                                     });
+
+        std::cout << SuccessMsg("Started DB compaction in background.") << std::endl;
         return true;
     }
 
     if (action == "wait")
     {
-        std::cout << InformationMsg("No background compaction job is tracked in this daemon build.") << std::endl;
+        if (!m_compactDbTask.valid())
+        {
+            std::cout << InformationMsg("No DB compaction job has been started.") << std::endl;
+            return true;
+        }
+
+        if (m_compactDbRunning)
+        {
+            std::cout << InformationMsg("Waiting for DB compaction to complete...") << std::endl;
+            m_compactDbTask.wait();
+        }
+
+        refreshCompactionState();
+
+        if (!m_compactDbRunning && m_compactDbLastSuccess)
+        {
+            std::cout << SuccessMsg("DB compaction completed.") << std::endl;
+            return true;
+        }
+
+        std::string error;
+        {
+            std::lock_guard<std::mutex> lock(m_compactDbMutex);
+            error = m_compactDbLastError;
+        }
+        std::cout << WarningMsg("DB compaction failed.");
+        if (!error.empty())
+        {
+            std::cout << " " << error;
+        }
+        std::cout << std::endl;
         return true;
     }
 
-    std::cout << "usage: compact_db [start|status|wait]" << std::endl;
+    if (action == "stop")
+    {
+        if (!m_compactDbRunning)
+        {
+            std::cout << InformationMsg("No running DB compaction job.") << std::endl;
+            return true;
+        }
+
+        if (!m_database)
+        {
+            std::cout << WarningMsg("Database handle is not available.") << std::endl;
+            return true;
+        }
+
+        if (m_database->cancelOptimize())
+        {
+            std::cout << InformationMsg("Stop requested for DB compaction.") << std::endl;
+        }
+        else
+        {
+            std::cout << WarningMsg("Unable to stop DB compaction (not running).") << std::endl;
+        }
+
+        return true;
+    }
+
+    std::cout << "usage: compact_db [start|status|wait|stop]" << std::endl;
     return true;
 }
 

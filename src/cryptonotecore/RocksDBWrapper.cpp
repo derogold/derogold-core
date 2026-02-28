@@ -9,6 +9,7 @@
 
 #include "DBUtils.h"
 #include "DataBaseErrors.h"
+#include "common/ScopeExit.h"
 
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/statistics.h>
@@ -207,58 +208,134 @@ namespace CryptoNote
 
     void RocksDBWrapper::optimize()
     {
+        if (optimizeRunning.exchange(true))
+        {
+            throw std::runtime_error("Database compaction is already running");
+        }
+
+        optimizeCancelRequested.store(false);
+
         const std::string dbData = getDataDir(config);
         const rocksdb::Options dbOptions = getDBOptions(config);
-        rocksdb::DB *rocksDb;
+        rocksdb::DB *rocksDb = nullptr;
 
-        if (rocksdb::DB::Open(dbOptions, dbData, &rocksDb).ok())
+        auto clearOptimizeHandle = [&]()
         {
-            rocksdb::CompactRangeOptions compactRangeOptions;
-            compactRangeOptions.exclusive_manual_compaction = true;
-            compactRangeOptions.change_level = true;
+            std::lock_guard<std::mutex> lock(optimizeMutex);
+            optimizeDbHandle = nullptr;
+        };
 
-            logger(Logging::INFO) << "Preparing to optimize DB for reading... This may take a long time.";
-            logger(Logging::INFO) << "Please do not close the program abruptly to prevent DB corruption.";
+        auto setOptimizeHandle = [&](rocksdb::DB *handle)
+        {
+            std::lock_guard<std::mutex> lock(optimizeMutex);
+            optimizeDbHandle = handle;
+        };
 
-            std::thread(
-                [&]
-                {
-                    while (rocksDb != nullptr)
-                    {
-                        std::string value;
-                        rocksDb->GetProperty("rocksdb.stats", &value);
-                        auto ss = std::stringstream {value};
-                        std::stringstream output;
-                        bool stop = false;
+        const auto stopOptimize = Common::ScopeExit([&]
+                                                    {
+                                                        clearOptimizeHandle();
+                                                        optimizeRunning.store(false);
+                                                    });
+        (void) stopOptimize;
 
-                        for (std::string line; std::getline(ss, line, '\n');)
-                        {
-                            if (line.find("**") != std::string::npos)
-                            {
-                                if (stop) break;
-                                stop = true;
-                            }
-
-                            output << line << std::endl;
-                        }
-
-                        logger(Logging::INFO) << output.str();
-
-                        std::this_thread::sleep_for(std::chrono::minutes(1));
-                    }
-                })
-                .detach();
-
-            rocksDb->CompactRange(compactRangeOptions, nullptr, nullptr);
-
-            auto waitForCompactOptions = rocksdb::WaitForCompactOptions();
-            waitForCompactOptions.flush = true;
-            waitForCompactOptions.close_db = true;
-            rocksDb->WaitForCompact(waitForCompactOptions);
-            rocksDb = nullptr;
-
-            logger(Logging::INFO) << "Optimized DeroGold DB.";
+        const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &rocksDb);
+        if (!openStatus.ok())
+        {
+            throw std::runtime_error("Failed to open DB for optimization: " + openStatus.ToString());
         }
+
+        setOptimizeHandle(rocksDb);
+
+        rocksdb::CompactRangeOptions compactRangeOptions;
+        compactRangeOptions.exclusive_manual_compaction = true;
+        compactRangeOptions.change_level = true;
+
+        logger(Logging::INFO) << "Preparing to optimize DB for reading... This may take a long time.";
+        logger(Logging::INFO) << "Please do not close the program abruptly to prevent DB corruption.";
+
+        std::atomic<bool> monitorStop(false);
+        std::thread monitorThread([&]
+                                  {
+                                      while (!monitorStop.load())
+                                      {
+                                          std::string value;
+                                          rocksDb->GetProperty("rocksdb.stats", &value);
+                                          auto ss = std::stringstream {value};
+                                          std::stringstream output;
+                                          bool stop = false;
+
+                                          for (std::string line; std::getline(ss, line, '\n');)
+                                          {
+                                              if (line.find("**") != std::string::npos)
+                                              {
+                                                  if (stop) break;
+                                                  stop = true;
+                                              }
+
+                                              output << line << std::endl;
+                                          }
+
+                                          logger(Logging::INFO) << output.str();
+
+                                          for (size_t i = 0; i < 60 && !monitorStop.load(); ++i)
+                                          {
+                                              std::this_thread::sleep_for(std::chrono::seconds(1));
+                                          }
+                                      }
+                                  });
+
+        rocksdb::Status compactStatus = rocksDb->CompactRange(compactRangeOptions, nullptr, nullptr);
+
+        auto waitForCompactOptions = rocksdb::WaitForCompactOptions();
+        waitForCompactOptions.flush = true;
+        waitForCompactOptions.close_db = true;
+        const rocksdb::Status waitStatus = rocksDb->WaitForCompact(waitForCompactOptions);
+
+        monitorStop.store(true);
+        if (monitorThread.joinable())
+        {
+            monitorThread.join();
+        }
+
+        delete rocksDb;
+        rocksDb = nullptr;
+        clearOptimizeHandle();
+
+        if (optimizeCancelRequested.load())
+        {
+            throw std::runtime_error("DB compaction was cancelled");
+        }
+
+        if (!compactStatus.ok())
+        {
+            throw std::runtime_error("DB compaction failed: " + compactStatus.ToString());
+        }
+
+        if (!waitStatus.ok())
+        {
+            throw std::runtime_error("DB wait-for-compaction failed: " + waitStatus.ToString());
+        }
+
+        logger(Logging::INFO) << "Optimized DeroGold DB.";
+    }
+
+    bool RocksDBWrapper::cancelOptimize()
+    {
+        if (!optimizeRunning.load())
+        {
+            return false;
+        }
+
+        optimizeCancelRequested.store(true);
+
+        std::lock_guard<std::mutex> lock(optimizeMutex);
+        if (optimizeDbHandle == nullptr)
+        {
+            return true;
+        }
+
+        optimizeDbHandle->CancelAllBackgroundWork(false);
+        return true;
     }
 
     rocksdb::Options RocksDBWrapper::getDBOptions(const DataBaseConfig &config)

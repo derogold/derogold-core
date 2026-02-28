@@ -15,12 +15,16 @@
 #include "rpc/JsonRpc.h"
 #include "rpc/RpcServer.h"
 
+#include <atomic>
 #include <chrono>
+#include <future>
+#include <mutex>
 #include <unordered_map>
 
 namespace CryptoNote
 {
     class Core;
+    class IDataBase;
     class NodeServer;
 } // namespace CryptoNote
 
@@ -33,6 +37,7 @@ public:
                           const std::shared_ptr<Logging::LoggerManager> &log,
                           const std::string &ip,
                           uint32_t port,
+                          const std::shared_ptr<CryptoNote::IDataBase> &database,
                           DaemonConfig::DaemonConfiguration config);
 
     bool start_handling()
@@ -64,8 +69,16 @@ private:
     DaemonConfig::DaemonConfiguration m_config;
 
     std::shared_ptr<Logging::LoggerManager> m_logManager;
+    std::shared_ptr<CryptoNote::IDataBase> m_database;
 
     std::unordered_map<std::string, std::chrono::system_clock::time_point> m_bannedHosts;
+    std::future<void> m_compactDbTask;
+    std::atomic<bool> m_compactDbRunning {false};
+    std::atomic<bool> m_compactDbLastSuccess {true};
+    std::atomic<bool> m_compactDbHasRun {false};
+    std::chrono::steady_clock::time_point m_compactDbStart;
+    std::string m_compactDbLastError;
+    std::mutex m_compactDbMutex;
 
     std::string get_commands_str() const;
 

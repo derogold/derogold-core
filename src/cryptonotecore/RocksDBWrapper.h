@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <logging/LoggerRef.h>
+#include <mutex>
 #include <memory>
 #include <string>
 
@@ -29,8 +30,12 @@ namespace CryptoNote
         const DataBaseConfig config;
 
         std::atomic<State> state;
+        std::atomic<bool> optimizeRunning {false};
+        std::atomic<bool> optimizeCancelRequested {false};
 
         std::unique_ptr<rocksdb::DB> db;
+        std::mutex optimizeMutex;
+        rocksdb::DB *optimizeDbHandle = nullptr;
 
     public:
         inline static const std::string DB_NAME = "DB";
@@ -63,6 +68,8 @@ namespace CryptoNote
         void recreate() override;
 
         void optimize() override;
+
+        bool cancelOptimize() override;
 
         const DataBaseConfig &getConfig() const override { return config; }
 
