@@ -15,6 +15,9 @@
 #include "rpc/JsonRpc.h"
 #include "rpc/RpcServer.h"
 
+#include <chrono>
+#include <unordered_map>
+
 namespace CryptoNote
 {
     class Core;
@@ -62,6 +65,8 @@ private:
 
     std::shared_ptr<Logging::LoggerManager> m_logManager;
 
+    std::unordered_map<std::string, std::chrono::system_clock::time_point> m_bannedHosts;
+
     std::string get_commands_str() const;
 
     bool print_block_by_height(uint32_t height);
@@ -85,4 +90,14 @@ private:
     bool print_pool_sh(const std::vector<std::string> &args);
 
     bool status(const std::vector<std::string> &args);
+
+    bool ban(const std::vector<std::string> &args);
+
+    bool compact_db(const std::vector<std::string> &args);
+
+    bool db_status(const std::vector<std::string> &args);
+
+    bool prune_status(const std::vector<std::string> &args);
+
+    bool save(const std::vector<std::string> &args);
 };

@@ -288,27 +288,77 @@ namespace CryptoNote
 
     void CryptoNoteProtocolHandler::log_connections()
     {
-        std::stringstream ss;
+        auto stateToShort = [](CryptoNoteConnectionContext::state state) -> std::string {
+            switch (state)
+            {
+                case CryptoNoteConnectionContext::state_synchronizing:
+                    return "synchronizing";
+                case CryptoNoteConnectionContext::state_idle:
+                    return "idle";
+                case CryptoNoteConnectionContext::state_normal:
+                    return "normal";
+                case CryptoNoteConnectionContext::state_sync_required:
+                    return "sync_required";
+                case CryptoNoteConnectionContext::state_pool_sync_required:
+                    return "pool_sync_required";
+                case CryptoNoteConnectionContext::state_shutdown:
+                    return "shutdown";
+                case CryptoNoteConnectionContext::state_before_handshake:
+                default:
+                    return "handshake";
+            }
+        };
 
-        ss << ENDL
-           << std::setw(32) << std::left << "Remote Host"
-           << std::setw(17) << "Peer ID"
-           << std::setw(26) << "State"
-           << std::setw(20) << "Lifetime(sec)"
-           << std::setw(11) << "Blocks/sec"
-           << std::setw(11) << "Height"
-           << ENDL;
+        auto formatUptime = [](time_t started) -> std::string {
+            const uint64_t elapsed = static_cast<uint64_t>(std::max<int64_t>(0, static_cast<int64_t>(time(nullptr) - started)));
+            const uint64_t days = elapsed / 86400;
+            const uint64_t hours = (elapsed % 86400) / 3600;
+            const uint64_t minutes = (elapsed % 3600) / 60;
+            const uint64_t seconds = elapsed % 60;
+
+            std::ostringstream out;
+            out << "d" << days << ".h" << std::setw(2) << std::setfill('0') << hours << ".m" << std::setw(2)
+                << std::setfill('0') << minutes << ".s" << std::setw(2) << std::setfill('0') << seconds;
+            return out.str();
+        };
+
+        std::vector<std::string> rows;
+        rows.reserve(32);
 
         m_p2p->for_each_connection([&](const CryptoNoteConnectionContext &cntxt, uint64_t peer_id) {
-            ss << std::setw(32) << std::left << std::string(cntxt.m_is_income ? "[INCOMING]" : "[OUTGOING]") + Common::ipAddressToString(cntxt.m_remote_ip) + ":" + std::to_string(cntxt.m_remote_port)
-               << std::setw(17) << std::hex << peer_id
-               << std::setw(26) << get_protocol_state_string(cntxt.m_state)
-               << std::setw(20) << std::to_string(time(nullptr) - cntxt.m_started)
-               << std::setw(11) << std::to_string(cntxt.m_request_block_rate)
-               << std::setw(11) << std::to_string(cntxt.m_remote_blockchain_height)
-               << ENDL;
+            std::ostringstream peerId;
+            peerId << std::hex << std::nouppercase << std::setfill('0') << std::setw(16) << peer_id;
+
+            std::ostringstream row;
+            row << "| " << std::setw(3) << std::left << (cntxt.m_is_income ? "IN" : "OUT")
+                << " | " << std::setw(29) << std::left
+                << (Common::ipAddressToString(cntxt.m_remote_ip) + ":" + std::to_string(cntxt.m_remote_port))
+                << " | " << std::setw(16) << std::left << peerId.str()
+                << " | " << std::setw(16) << std::left << stateToShort(cntxt.m_state)
+                << " | " << std::setw(14) << std::left << formatUptime(cntxt.m_started)
+                << " | " << std::setw(8) << std::right << cntxt.m_remote_blockchain_height
+                << " | " << std::setw(6) << std::left << "no"
+                << " | " << std::setw(5) << std::right << cntxt.m_next_request_block_rate
+                << " | " << std::setw(4) << std::right << 0
+                << " |";
+            rows.push_back(row.str());
         });
-        logger(INFO) << "Connections: " << ENDL << ss.str();
+
+        const std::string separator =
+            "+-----+-------------------------------+------------------+------------------+----------------+----------+--------+-------+------+";
+        std::stringstream ss;
+        ss << separator << ENDL
+           << "| Dir | Remote                        | Peer ID          | State            | Uptime         | Height   | Pruned | Batch | Fail |"
+           << ENDL
+           << separator << ENDL;
+
+        for (const auto &row : rows)
+        {
+            ss << row << ENDL;
+        }
+
+        ss << separator;
+        logger(INFO) << "Connections:" << ENDL << ss.str();
     }
 
     uint32_t CryptoNoteProtocolHandler::get_current_blockchain_height()

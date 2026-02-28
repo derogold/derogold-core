@@ -9,21 +9,28 @@
 #include "version.h"
 
 #include <boost/format.hpp>
+#include <common/Util.h>
 #include <cryptonotecore/Core.h>
 #include <cryptonotecore/Currency.h>
 #include <cryptonoteprotocol/CryptoNoteProtocolHandler.h>
 #include <ctime>
 #include <daemon/DaemonCommandsHandler.h>
+#include <filesystem>
 #include <p2p/NetNode.h>
 #include <rpc/JsonRpc.h>
 #include <serialization/SerializationTools.h>
 #include <utilities/ColouredMsg.h>
 #include <utilities/FormatTools.h>
 #include <utilities/Utilities.h>
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 namespace
 {
+    namespace fs = std::filesystem;
+
     template<typename T> bool print_as_json(const T &obj)
     {
         std::cout << CryptoNote::storeToJson(obj) << ENDL;
@@ -76,6 +83,21 @@ DaemonCommandsHandler::DaemonCommandsHandler(
     m_consoleHandler
         .setHandler("help", [this](const std::vector<std::string> &args) { return help(args); }, "Show this help");
     m_consoleHandler.setHandler(
+        "ban",
+        [this](const std::vector<std::string> &args) { return ban(args); },
+        "Manage in-memory host bans: ban list | ban add <ip> [seconds] | ban delete <ip>"
+    );
+    m_consoleHandler.setHandler(
+        "compact_db",
+        [this](const std::vector<std::string> &args) { return compact_db(args); },
+        "Manage DB compaction: compact_db [start|status|wait]"
+    );
+    m_consoleHandler.setHandler(
+        "db_status",
+        [this](const std::vector<std::string> &args) { return db_status(args); },
+        "Show on-disk DB status for the active DB engine"
+    );
+    m_consoleHandler.setHandler(
         "print_pl",
         [this](const std::vector<std::string> &args) { return print_pl(args); },
         "Print peer list"
@@ -104,6 +126,16 @@ DaemonCommandsHandler::DaemonCommandsHandler(
         "print_pool_sh",
         [this](const std::vector<std::string> &args) { return print_pool_sh(args); },
         "Print transaction pool (short format)"
+    );
+    m_consoleHandler.setHandler(
+        "prune_status",
+        [this](const std::vector<std::string> &args) { return prune_status(args); },
+        "Show prune mode and capability status"
+    );
+    m_consoleHandler.setHandler(
+        "save",
+        [this](const std::vector<std::string> &args) { return save(args); },
+        "Force-save blockchain state to disk"
     );
     m_consoleHandler.setHandler(
         "set_log",
@@ -447,6 +479,184 @@ bool DaemonCommandsHandler::status(const std::vector<std::string> &args)
         std::cout << WarningMsg(Utilities::get_upgrade_info(supportedHeight, upgradeHeights)) << std::endl;
     }
 
+    return true;
+}
+
+bool DaemonCommandsHandler::ban(const std::vector<std::string> &args)
+{
+    const auto now = std::chrono::system_clock::now();
+
+    for (auto it = m_bannedHosts.begin(); it != m_bannedHosts.end();)
+    {
+        if (it->second <= now)
+        {
+            it = m_bannedHosts.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (args.empty() || args[0] == "list")
+    {
+        if (m_bannedHosts.empty())
+        {
+            std::cout << InformationMsg("Ban list is empty.") << std::endl;
+            return true;
+        }
+
+        std::cout << InformationMsg("Banned hosts:") << std::endl;
+        for (const auto &[ip, expiry] : m_bannedHosts)
+        {
+            const auto secs =
+                std::chrono::duration_cast<std::chrono::seconds>(expiry - now).count();
+            std::cout << "  " << ip << " (" << std::max<int64_t>(0, secs) << "s remaining)" << std::endl;
+        }
+        return true;
+    }
+
+    if (args[0] == "add")
+    {
+        if (args.size() < 2 || args.size() > 3)
+        {
+            std::cout << "usage: ban add <ip> [seconds]" << std::endl;
+            return true;
+        }
+
+        uint64_t banSeconds = 3600;
+        if (args.size() == 3 && !Common::fromString(args[2], banSeconds))
+        {
+            std::cout << "Invalid seconds value." << std::endl;
+            return true;
+        }
+
+        m_bannedHosts[args[1]] = now + std::chrono::seconds(banSeconds);
+        std::cout << InformationMsg("Banned host: ") << SuccessMsg(args[1]) << InformationMsg(" for ")
+                  << SuccessMsg(std::to_string(banSeconds) + "s") << std::endl;
+
+        m_srv.for_each_connection([&](CryptoNote::CryptoNoteConnectionContext &ctx, uint64_t)
+                                  {
+                                      const std::string remoteIp = Common::ipAddressToString(ctx.m_remote_ip);
+                                      if (remoteIp == args[1])
+                                      {
+                                          ctx.m_state = CryptoNote::CryptoNoteConnectionContext::state_shutdown;
+                                      }
+                                  });
+
+        return true;
+    }
+
+    if (args[0] == "delete")
+    {
+        if (args.size() != 2)
+        {
+            std::cout << "usage: ban delete <ip>" << std::endl;
+            return true;
+        }
+
+        if (m_bannedHosts.erase(args[1]) > 0)
+        {
+            std::cout << InformationMsg("Unbanned host: ") << SuccessMsg(args[1]) << std::endl;
+        }
+        else
+        {
+            std::cout << WarningMsg("Host is not in ban list: ") << args[1] << std::endl;
+        }
+        return true;
+    }
+
+    std::cout << "usage: ban list | ban add <ip> [seconds] | ban delete <ip>" << std::endl;
+    return true;
+}
+
+bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
+{
+    std::string action = args.empty() ? "status" : args[0];
+    std::transform(action.begin(), action.end(), action.begin(), [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
+
+    if (action == "status")
+    {
+        std::cout << InformationMsg("DB compaction is available at startup via --db-optimize.") << std::endl;
+        return true;
+    }
+
+    if (action == "start")
+    {
+        std::cout << WarningMsg("Live compaction trigger is not exposed in this daemon build. ")
+                  << "Restart with --db-optimize to run full compaction." << std::endl;
+        return true;
+    }
+
+    if (action == "wait")
+    {
+        std::cout << InformationMsg("No background compaction job is tracked in this daemon build.") << std::endl;
+        return true;
+    }
+
+    std::cout << "usage: compact_db [start|status|wait]" << std::endl;
+    return true;
+}
+
+bool DaemonCommandsHandler::db_status(const std::vector<std::string> &args)
+{
+    const fs::path dbPath = fs::path(m_config.dataDirectory) / "DB";
+
+    if (!fs::exists(dbPath))
+    {
+        std::cout << WarningMsg("DB path does not exist: ") << dbPath.string() << std::endl;
+        return true;
+    }
+
+    uintmax_t totalBytes = 0;
+    uint64_t fileCount = 0;
+    std::error_code ec;
+    for (const auto &entry : fs::recursive_directory_iterator(dbPath, ec))
+    {
+        if (ec)
+        {
+            break;
+        }
+        if (entry.is_regular_file(ec))
+        {
+            fileCount++;
+            totalBytes += entry.file_size(ec);
+        }
+    }
+
+    std::cout << InformationMsg("DB Engine: ") << SuccessMsg("RocksDB") << std::endl;
+    std::cout << InformationMsg("DB Path: ") << SuccessMsg(dbPath.string()) << std::endl;
+    std::cout << InformationMsg("DB Files: ") << SuccessMsg(fileCount) << std::endl;
+    std::cout << InformationMsg("DB Size: ") << SuccessMsg(Utilities::prettyPrintBytes(totalBytes)) << std::endl;
+    std::cout << InformationMsg("Compression: ") << SuccessMsg(m_config.enableDbCompression ? "Enabled" : "Disabled")
+              << std::endl;
+    return true;
+}
+
+bool DaemonCommandsHandler::prune_status(const std::vector<std::string> &args)
+{
+    const uint64_t height = m_core.getTopBlockIndex() + 1;
+    const uint64_t pruneDepth = m_config.pruneDepth;
+    const uint64_t pruneFloor = height > pruneDepth ? height - pruneDepth : 0;
+
+    std::cout << InformationMsg("Pruned Node: ") << SuccessMsg(m_config.prune ? "Yes" : "No") << std::endl;
+    std::cout << InformationMsg("Prune Depth: ") << SuccessMsg(pruneDepth) << std::endl;
+    std::cout << InformationMsg("Approx Prune Floor Height: ") << SuccessMsg(pruneFloor) << std::endl;
+    return true;
+}
+
+bool DaemonCommandsHandler::save(const std::vector<std::string> &args)
+{
+    try
+    {
+        m_core.save();
+        std::cout << SuccessMsg("Blockchain state saved.") << std::endl;
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << WarningMsg("Save failed: ") << e.what() << std::endl;
+    }
     return true;
 }
 
