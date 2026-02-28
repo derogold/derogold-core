@@ -231,11 +231,11 @@ namespace CryptoNote
             optimizeDbHandle = handle;
         };
 
-        const auto stopOptimize = Common::ScopeExit([&]
-                                                    {
-                                                        clearOptimizeHandle();
-                                                        optimizeRunning.store(false);
-                                                    });
+        const auto stopOptimize = Tools::ScopeExit([&]
+                                                   {
+                                                       clearOptimizeHandle();
+                                                       optimizeRunning.store(false);
+                                                   });
         (void) stopOptimize;
 
         const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &rocksDb);
@@ -328,13 +328,6 @@ namespace CryptoNote
 
         optimizeCancelRequested.store(true);
 
-        std::lock_guard<std::mutex> lock(optimizeMutex);
-        if (optimizeDbHandle == nullptr)
-        {
-            return true;
-        }
-
-        optimizeDbHandle->CancelAllBackgroundWork(false);
         return true;
     }
 
