@@ -28,6 +28,7 @@
       <li><a href="#clang-1">CLANG</a></li>
     </ol>
   </ol>
+  <li><a href="#fast-sync---sync-from-height">Fast Sync (--sync-from-height)</a></li>
   <li><a href="#license">License</a></li>
   <li><a href="#thanks">Thanks</a></li>
 </ol>
@@ -334,6 +335,48 @@ cmake --build --preset osx-x64-clang-all
 cmake --preset osx-x64-clang-install
 sudo cmake --build --preset osx-x64-clang-install
 ```
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## Fast Sync (--sync-from-height)
+
+The DeroGold blockchain is 350 GB+ from genesis. The `--sync-from-height` flag lets a fresh node skip the historical chain and start syncing from a recent checkpoint instead, reducing initial sync time from days to hours.
+
+### How it works
+
+On first launch with an empty database, the node injects a trusted anchor block at the specified height (verified against the hard-coded checkpoints) and begins downloading only blocks from that point onward. Blocks below the sync floor are trusted via the checkpoint — ring signature verification is bypassed for historical inputs that predate the floor, identically to how the standard checkpoint zone works.
+
+> **Note:** Do not use `--sync-from-height` on mining nodes. Miners must have the full chain to correctly validate all outputs.
+
+### Available sync floors
+
+| Height    | Approx. date  |
+|-----------|---------------|
+| 1,000,000 | 2021          |
+| 1,500,000 | 2022          |
+| 2,000,000 | 2022          |
+| 2,500,000 | 2023          |
+| 2,700,000 | 2024 *(recommended)* |
+
+The highest available floor (2,700,000) gives the fastest sync. Lower floors retain more history.
+
+### Usage
+
+```bash
+./DeroGoldd --sync-from-height=2700000
+```
+
+The argument must match one of the supported heights listed above. If the database already contains blocks the flag is silently ignored — use `--resync` first if you need a clean start.
+
+### Exporting a new bootstrap state (for node operators)
+
+If you run a fully-synced node and want to add a new floor height, run this command from the daemon console:
+
+```
+export_bootstrap_state <height>
+```
+
+The height must already exist in `CryptoNoteCheckpoints.h`. Copy the printed values into a new entry in `src/config/SyncBootstrapCheckpoints.h`, rebuild, and distribute.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
