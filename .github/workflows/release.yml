@@ -28,7 +28,7 @@ jobs:
             configure_preset: windows-x64-msvc-package
             build_preset: windows-x64-msvc-package
 
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             arch: x64
             compiler: gcc
             install: >-
@@ -79,7 +79,7 @@ jobs:
           }
 
       - name: Install CMake
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v3.31.6
 
       - name: Setup ccache
         uses: jianmingyong/ccache-action@v1
