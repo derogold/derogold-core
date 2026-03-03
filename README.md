@@ -28,6 +28,7 @@
       <li><a href="#clang-1">CLANG</a></li>
     </ol>
   </ol>
+  <li><a href="#pruned-node-mode">Pruned Node Mode</a></li>
   <li><a href="#fast-sync---sync-from-height">Fast Sync (--sync-from-height)</a></li>
   <li><a href="#license">License</a></li>
   <li><a href="#thanks">Thanks</a></li>
@@ -335,6 +336,49 @@ cmake --build --preset osx-x64-clang-all
 cmake --preset osx-x64-clang-install
 sudo cmake --build --preset osx-x64-clang-install
 ```
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## Pruned Node Mode
+
+A pruned node retains only a recent window of raw block data, discarding historical blocks that are no longer needed for normal operation. This dramatically reduces disk usage while keeping the node fully functional for wallets and the network.
+
+### Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--prune` | off | Enable pruned-node mode |
+| `--prune-depth=<blocks>` | 2016 | Number of recent blocks to keep (minimum 2016 ≈ 7 days) |
+| `--background-prune` | on | Run the prune task periodically in the background |
+
+With a 5-minute block target, 2016 blocks ≈ 7 days of history. Increase `--prune-depth` if you need to serve more history to wallets.
+
+### Usage
+
+```bash
+# Pruned node keeping the last 7 days of blocks (default depth)
+./DeroGoldd --prune
+
+# Pruned node keeping the last 30 days of blocks (~8640 blocks)
+./DeroGoldd --prune --prune-depth=8640
+
+# Disable the automatic background prune task (manual control only)
+./DeroGoldd --prune --background-prune=false
+```
+
+> **Note:** `--prune` must be used on a fresh data directory or combined with `--resync`. It cannot be applied to an existing fully-synced database mid-run.
+
+### Daemon console commands
+
+Once the node is running, use these commands from the daemon console:
+
+| Command | Description |
+|---|---|
+| `prune_status` | Show prune mode, depth, and current prune floor height |
+| `compact_db [start\|status\|wait\|stop]` | Manually manage RocksDB compaction |
+| `db_status` | Show database size and file statistics |
+
+RocksDB compaction is also triggered **automatically** by a background scheduler. The scheduler runs every 60 seconds while the node is syncing, and slows to every 30 minutes once the node is near the chain tip.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
