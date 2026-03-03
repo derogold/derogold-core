@@ -214,5 +214,31 @@ namespace CryptoNote
             const bool performExpensiveValidation) = 0;
 
         virtual void rewind(const uint64_t blockIndex) = 0;
+
+        /**
+         * Returns the cumulative difficulty at the given block index (i.e. the sum
+         * of all block difficulties from genesis through that block).
+         */
+        virtual uint64_t getCumulativeDifficulty(uint32_t blockIndex) const = 0;
+
+        /**
+         * Returns the sync-floor height that was set via --sync-from-height, or 0
+         * if the node was synced from genesis in the normal way.
+         */
+        virtual uint32_t getSyncFloorHeight() const = 0;
+
+        /**
+         * Bootstrap the chain state to @p bootstrapHeight so that normal P2P sync
+         * can continue from that height rather than from genesis.
+         *
+         * Must be called immediately after load() on a fresh / resync'd database
+         * before any blocks are received from peers.
+         */
+        virtual void bootstrapFromHeight(uint32_t bootstrapHeight,
+                                         const Crypto::Hash &anchorHash,
+                                         uint64_t anchorTimestamp,
+                                         uint64_t alreadyGeneratedCoins,
+                                         uint64_t cumulativeDifficulty,
+                                         uint64_t alreadyGeneratedTransactions) = 0;
     };
 } // namespace CryptoNote

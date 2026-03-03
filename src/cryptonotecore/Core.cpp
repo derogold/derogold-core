@@ -17,6 +17,7 @@
 #include <config/Constants.h>
 #include <cryptonotecore/BlockchainUtils.h>
 #include <cryptonotecore/Core.h>
+#include <cryptonotecore/DatabaseBlockchainCache.h>
 #include <cryptonotecore/CoreErrors.h>
 #include <cryptonotecore/CryptoNoteFormatUtils.h>
 #include <cryptonotecore/ITimeProvider.h>
@@ -1092,6 +1093,17 @@ namespace CryptoNote
 
         assert(difficulties.size() == 1);
         return difficulties[0];
+    }
+
+    uint64_t Core::getCumulativeDifficulty(uint32_t blockIndex) const
+    {
+        throwIfNotInitialized();
+        IBlockchainCache *segment = findSegmentContainingBlock(blockIndex);
+        if (segment == nullptr)
+        {
+            throw std::runtime_error("getCumulativeDifficulty: block index not found");
+        }
+        return segment->getCurrentCumulativeDifficulty(blockIndex);
     }
 
     // TODO: just use mainChain->getDifficultyForNextBlock() ?
@@ -2238,7 +2250,8 @@ namespace CryptoNote
             blockIndex,
             blockMedianSize,
             blockTimestamp,
-            isPoolTransaction
+            isPoolTransaction,
+            getSyncFloorHeight()
         );
 
         const auto result = txValidator.validate();
@@ -2888,6 +2901,57 @@ namespace CryptoNote
         logger(Logging::INFO) << "Blockchain rewound to: " << blockIndex << std::endl;
     }
 
+    uint32_t Core::getSyncFloorHeight() const
+    {
+        throwIfNotInitialized();
+        /* chainsLeaves[0] is always the DatabaseBlockchainCache (root segment). */
+        auto *dbCache = dynamic_cast<DatabaseBlockchainCache *>(chainsLeaves[0]);
+        if (!dbCache)
+        {
+            return 0;
+        }
+        return dbCache->getSyncFloorHeight();
+    }
+
+    void Core::bootstrapFromHeight(
+        uint32_t bootstrapHeight,
+        const Crypto::Hash &anchorHash,
+        uint64_t anchorTimestamp,
+        uint64_t alreadyGeneratedCoins,
+        uint64_t cumulativeDifficulty,
+        uint64_t alreadyGeneratedTransactions)
+    {
+        throwIfNotInitialized();
+
+        auto *dbCache = dynamic_cast<DatabaseBlockchainCache *>(chainsLeaves[0]);
+        if (!dbCache)
+        {
+            logger(Logging::ERROR) << "bootstrapFromHeight: root segment is not a DatabaseBlockchainCache";
+            throw std::runtime_error("bootstrapFromHeight: unsupported cache type");
+        }
+
+        /* Sanity: must only be called on a fresh chain (genesis only). */
+        if (dbCache->getTopBlockIndex() != 0)
+        {
+            logger(Logging::WARNING)
+                << "bootstrapFromHeight: DB already has " << dbCache->getTopBlockIndex()
+                << " blocks – skipping bootstrap injection (already bootstrapped or synced).";
+            return;
+        }
+
+        dbCache->injectBootstrapAnchor(
+            bootstrapHeight,
+            anchorHash,
+            anchorTimestamp,
+            alreadyGeneratedCoins,
+            cumulativeDifficulty,
+            alreadyGeneratedTransactions);
+
+        logger(Logging::INFO)
+            << "Bootstrap anchor injected at height " << bootstrapHeight
+            << ". Sync will begin from this height.";
+    }
+
     CryptoNote::RawBlock Core::getRawBlock(uint32_t blockIndex) const
     {
         assert(!chainsStorage.empty());
@@ -3021,15 +3085,37 @@ namespace CryptoNote
         const IBlockchainCache *chain = findSegmentContainingBlock(blockHash);
         const uint32_t blockIndex = chain->getBlockIndex(blockHash);
 
+        /* When the node was bootstrapped from a specific height, there are no
+           block records for indices between genesis (0) and the anchor (syncFloor).
+           We must not attempt to call getBlockHash() for those missing indices. */
+        const uint32_t syncFloor = getSyncFloorHeight();
+
         std::vector<Crypto::Hash> sparseChain;
         sparseChain.push_back(blockHash);
 
         for (uint32_t i = 1; i < blockIndex; i *= 2)
         {
-            sparseChain.push_back(chain->getBlockHash(blockIndex - i));
+            const uint32_t targetIndex = blockIndex - i;
+
+            /* Skip indices that fall in the gap between genesis and the anchor. */
+            if (syncFloor > 0 && targetIndex > 0 && targetIndex < syncFloor)
+            {
+                break;
+            }
+
+            sparseChain.push_back(chain->getBlockHash(targetIndex));
+
+            /* Once we've included the anchor itself, stop – the next iteration
+               would go into the gap. */
+            if (syncFloor > 0 && targetIndex == syncFloor)
+            {
+                break;
+            }
         }
 
-        if (const auto genesisBlockHash = chain->getBlockHash(0); sparseChain[0] != genesisBlockHash)
+        /* Always include genesis so peers can validate our chain request. */
+        if (const auto genesisBlockHash = chain->getBlockHash(0);
+            sparseChain.back() != genesisBlockHash)
         {
             sparseChain.push_back(genesisBlockHash);
         }

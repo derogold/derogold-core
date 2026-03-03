@@ -196,6 +196,38 @@ namespace CryptoNote
 
         virtual void load() override;
 
+        /* --sync-from-height bootstrap support ----------------------------------- */
+
+        /**
+         * Returns the sync-floor height stored in the database, or 0 if the node
+         * has not been bootstrapped from a specific height.
+         */
+        uint32_t getSyncFloorHeight() const;
+
+        /**
+         * Injects a bootstrap anchor block at @p anchorHeight into the database.
+         *
+         * This creates a minimal but valid chain state at @p anchorHeight using
+         * the supplied accumulated values.  Only genesis (height 0) and the anchor
+         * block (height @p anchorHeight) will exist in the database afterwards.
+         * Normal sync then continues from anchorHeight + 1 on-wards.
+         *
+         * @param anchorHeight              Height of the bootstrap block.
+         * @param anchorHash                Block hash at anchorHeight (must match
+         *                                  the hard-coded checkpoint for that height).
+         * @param anchorTimestamp           Block timestamp at anchorHeight.
+         * @param alreadyGeneratedCoins     Total coin emission through anchorHeight.
+         * @param cumulativeDifficulty      Cumulative difficulty through anchorHeight.
+         * @param alreadyGeneratedTransactions Total transactions through anchorHeight.
+         */
+        void injectBootstrapAnchor(
+            uint32_t anchorHeight,
+            const Crypto::Hash &anchorHash,
+            uint64_t anchorTimestamp,
+            uint64_t alreadyGeneratedCoins,
+            uint64_t cumulativeDifficulty,
+            uint64_t alreadyGeneratedTransactions);
+
         virtual std::vector<BinaryArray> getRawTransactions(
             const std::vector<Crypto::Hash> &transactions,
             std::vector<Crypto::Hash> &missedTransactions) const override;

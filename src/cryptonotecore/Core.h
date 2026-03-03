@@ -140,6 +140,8 @@ namespace CryptoNote
 
         virtual uint64_t getBlockDifficulty(uint32_t blockIndex) const override;
 
+        virtual uint64_t getCumulativeDifficulty(uint32_t blockIndex) const override;
+
         virtual uint64_t getDifficultyForNextBlock() const override;
 
         virtual std::error_code addBlock(const CachedBlock &cachedBlock, RawBlock &&rawBlock) override;
@@ -238,6 +240,15 @@ namespace CryptoNote
             const bool performExpensiveValidation) override;
 
         virtual void rewind(const uint64_t blockIndex) override;
+
+        virtual uint32_t getSyncFloorHeight() const override;
+
+        virtual void bootstrapFromHeight(uint32_t bootstrapHeight,
+                                         const Crypto::Hash &anchorHash,
+                                         uint64_t anchorTimestamp,
+                                         uint64_t alreadyGeneratedCoins,
+                                         uint64_t cumulativeDifficulty,
+                                         uint64_t alreadyGeneratedTransactions) override;
 
         CryptoNote::RawBlock getRawBlock(uint32_t blockIndex) const;
 

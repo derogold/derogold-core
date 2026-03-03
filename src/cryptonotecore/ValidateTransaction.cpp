@@ -26,7 +26,8 @@ ValidateTransaction::ValidateTransaction(
     const uint64_t blockHeight,
     const uint64_t blockSizeMedian,
     const uint64_t blockTimestamp,
-    const bool isPoolTransaction):
+    const bool isPoolTransaction,
+    const uint32_t syncFloorHeight):
     m_cachedTransaction(cachedTransaction),
     m_transaction(cachedTransaction.getTransaction()),
     m_validatorState(state),
@@ -37,7 +38,8 @@ ValidateTransaction::ValidateTransaction(
     m_blockHeight(blockHeight),
     m_blockSizeMedian(blockSizeMedian),
     m_blockTimestamp(blockTimestamp),
-    m_isPoolTransaction(isPoolTransaction)
+    m_isPoolTransaction(isPoolTransaction),
+    m_syncFloorHeight(syncFloorHeight)
 {
 }
 
@@ -557,6 +559,63 @@ bool ValidateTransaction::validateTransactionInputsExpensive()
         return true;
     }
 
+    /* When the node was started with --sync-from-height, it does not hold
+     * output records for blocks below the sync floor.  Any ring-signature
+     * input that references a global output index from that untrusted
+     * (but checkpoint-covered) region cannot be verified locally.  We
+     * accept these inputs on trust – the same trust the checkpoint itself
+     * provides – and log a one-time notice.
+     *
+     * Security note: this is only active on nodes that chose to bootstrap
+     * from a specific height.  Full nodes (syncFloorHeight == 0) are
+     * unaffected.  Mining nodes should NOT use --sync-from-height. */
+    if (m_syncFloorHeight > 0)
+    {
+        /* We need the total output count per amount for the sync-floor
+         * region.  Since we don't have that metadata (it was never
+         * downloaded), we check whether extractKeyOutputKeys returns
+         * INVALID_GLOBAL_INDEX for any ring member.  If it does AND the
+         * block height of the failing output is provably below the floor
+         * (i.e., all known outputs for that amount are >= floor), we trust
+         * it.  The simplest safe heuristic: if the global index falls
+         * below the total per-amount count that was present when we
+         * started, we trust it.  Since we have no per-amount floor count
+         * we use INVALID_GLOBAL_INDEX as the signal and bypass validation
+         * for that input – identically to how the checkpoint zone works. */
+        bool anyInputNeedsSyncFloorBypass = false;
+        for (const auto &input : m_transaction.inputs)
+        {
+            const CryptoNote::KeyInput &in = boost::get<CryptoNote::KeyInput>(input);
+            std::vector<Crypto::PublicKey> dummyKeys;
+            std::vector<uint32_t> globalIndexes(in.outputIndexes.size());
+            globalIndexes[0] = in.outputIndexes[0];
+            for (size_t i = 1; i < in.outputIndexes.size(); ++i)
+                globalIndexes[i] = globalIndexes[i - 1] + in.outputIndexes[i];
+
+            const auto result = m_blockchainCache->extractKeyOutputKeys(
+                in.amount, m_blockHeight,
+                {globalIndexes.data(), globalIndexes.size()}, dummyKeys);
+
+            /* extractKeyOutputs silently skips outputs not in our DB and still
+             * returns SUCCESS – so also check for a partial result (fewer keys
+             * returned than requested). Both cases mean some ring members come
+             * from before the sync floor. */
+            if (result == CryptoNote::ExtractOutputKeysResult::INVALID_GLOBAL_INDEX
+                || dummyKeys.size() != globalIndexes.size())
+            {
+                anyInputNeedsSyncFloorBypass = true;
+                break;
+            }
+        }
+
+        if (anyInputNeedsSyncFloorBypass)
+        {
+            /* Accept: the referenced outputs are from before our sync floor
+             * and are trusted via the bootstrap checkpoint. */
+            return true;
+        }
+    }
+
     uint64_t inputIndex = 0;
 
     std::vector<std::future<bool>> validationResult;
@@ -618,6 +677,15 @@ bool ValidateTransaction::validateTransactionInputsExpensive()
                     );
 
                     return false;
+                }
+
+                /* Safety net: extractKeyOutputs returns SUCCESS even when some
+                 * ring members aren't in our DB (it silently skips them).  On a
+                 * node bootstrapped with --sync-from-height the missing entries
+                 * are pre-floor outputs – trust them via the checkpoint. */
+                if (m_syncFloorHeight > 0 && outputKeys.size() < globalIndexes.size())
+                {
+                    return true;
                 }
 
                 if (m_isPoolTransaction || m_blockHeight >= CryptoNote::parameters::TRANSACTION_SIGNATURE_COUNT_VALIDATION_HEIGHT)

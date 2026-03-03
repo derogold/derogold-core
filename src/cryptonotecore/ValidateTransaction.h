@@ -52,7 +52,8 @@ class ValidateTransaction
             uint64_t blockHeight,
             uint64_t blockSizeMedian,
             uint64_t blockTimestamp,
-            bool isPoolTransaction);
+            bool isPoolTransaction,
+            uint32_t syncFloorHeight = 0);
 
         /////////////////////////////
         /* PUBLIC MEMBER FUNCTIONS */
@@ -110,6 +111,12 @@ class ValidateTransaction
 
         uint64_t m_sumOfOutputs = 0;
         uint64_t m_sumOfInputs = 0;
+
+        /* Height below which this node has no block data (sync-from-height mode).
+           When > 0, ring-signature inputs that reference global output indices
+           known to be from before this floor are accepted on trust (the
+           checkpoint covering that range is the cryptographic guarantee). */
+        uint32_t m_syncFloorHeight = 0;
 
         Utilities::ThreadPool<bool> &m_threadPool;
 

@@ -1,4 +1,4 @@
-# Change Logs from v0.7.1
+# Change Logs from v1.0.0
 
 ## Daemon
 - Changed seed node address.

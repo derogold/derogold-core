@@ -10,6 +10,7 @@
 
 #include <boost/iterator/iterator_facade.hpp>
 #include <common/CryptoNoteTools.h>
+#include <common/StringTools.h>
 #include <common/ShuffleGenerator.h>
 #include <common/TransactionExtra.h>
 #include <cryptonotecore/BlockchainStorage.h>
@@ -2360,6 +2361,99 @@ namespace CryptoNote
 
         return batch.extractResult();
     }
+
+    /* --sync-from-height bootstrap helpers ---------------------------------------- */
+
+    namespace
+    {
+        const std::string SYNC_FLOOR_KEY = "sync_floor_height";
+    } // namespace
+
+    uint32_t DatabaseBlockchainCache::getSyncFloorHeight() const
+    {
+        struct SyncFloorReadBatch : public IReadBatch
+        {
+            std::vector<std::string> getRawKeys() const override { return {SYNC_FLOOR_KEY}; }
+            void submitRawResult(const std::vector<std::string> &values,
+                                 const std::vector<bool> &states) override
+            {
+                if (!states.empty() && states[0])
+                    height = static_cast<uint32_t>(std::stoul(values[0]));
+            }
+            boost::optional<uint32_t> height;
+        };
+
+        SyncFloorReadBatch batch;
+        auto ec = database.read(batch);
+        if (ec)
+        {
+            logger(Logging::ERROR) << "getSyncFloorHeight: read error: " << ec.message();
+            return 0;
+        }
+        return batch.height.value_or(0);
+    }
+
+    void DatabaseBlockchainCache::injectBootstrapAnchor(
+        uint32_t anchorHeight,
+        const Crypto::Hash &anchorHash,
+        uint64_t anchorTimestamp,
+        uint64_t alreadyGeneratedCoins,
+        uint64_t cumulativeDifficulty,
+        uint64_t alreadyGeneratedTransactions)
+    {
+        logger(Logging::INFO)
+            << "injectBootstrapAnchor: injecting sync anchor at height " << anchorHeight
+            << " (" << Common::podToHex(anchorHash) << ")";
+
+        /* Build a minimal CachedBlockInfo for the anchor. */
+        CachedBlockInfo anchorInfo;
+        anchorInfo.blockHash                    = anchorHash;
+        anchorInfo.timestamp                    = anchorTimestamp;
+        anchorInfo.cumulativeDifficulty         = cumulativeDifficulty;
+        anchorInfo.alreadyGeneratedCoins        = alreadyGeneratedCoins;
+        anchorInfo.alreadyGeneratedTransactions = alreadyGeneratedTransactions;
+        anchorInfo.blockSize =
+            static_cast<uint32_t>(currency.blockGrantedFullRewardZone());
+
+        BlockchainWriteBatch anchorBatch;
+        anchorBatch.insertCachedBlock(anchorInfo, anchorHeight, {} /* no txHashes */);
+        anchorBatch.insertRawBlock(anchorHeight, RawBlock{} /* empty – served by peers */);
+
+        auto res = database.write(anchorBatch);
+        if (res)
+        {
+            logger(Logging::ERROR) << "injectBootstrapAnchor: write failed: " << res.message();
+            throw std::runtime_error(res.message());
+        }
+
+        /* Persist the sync floor height as DB metadata. */
+        struct SyncFloorWriteBatch : public IWriteBatch
+        {
+            explicit SyncFloorWriteBatch(uint32_t h) : height(h) {}
+            std::vector<std::pair<std::string, std::string>> extractRawDataToInsert() override
+            {
+                return {{SYNC_FLOOR_KEY, std::to_string(height)}};
+            }
+            std::vector<std::string> extractRawKeysToRemove() override { return {}; }
+            uint32_t height;
+        };
+
+        SyncFloorWriteBatch floorBatch(anchorHeight);
+        auto res2 = database.write(floorBatch);
+        if (res2)
+        {
+            logger(Logging::ERROR) << "injectBootstrapAnchor: floor metadata write failed: " << res2.message();
+            throw std::runtime_error(res2.message());
+        }
+
+        /* Invalidate in-memory caches so next access picks up the anchor. */
+        topBlockIndex = boost::none;
+        topBlockHash  = boost::none;
+
+        logger(Logging::INFO) << "injectBootstrapAnchor: complete, DB top is now " << getTopBlockIndex();
+    }
+
+    /* ----------------------------------------------------------------------------- */
 
     void DatabaseBlockchainCache::addGenesisBlock(CachedBlock &&genesisBlock)
     {

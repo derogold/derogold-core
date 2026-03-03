@@ -371,7 +371,7 @@ namespace CryptoNote
         cfOptions.target_file_size_base = std::max<uint64_t>(config.writeBufferSize / 2, 8ULL * 1024 * 1024);
         cfOptions.max_bytes_for_level_base = std::max<uint64_t>(config.writeBufferSize * 4, 64ULL * 1024 * 1024);
 
-        cfOptions.num_levels = 7;
+        cfOptions.num_levels = 10;
         cfOptions.target_file_size_multiplier = 2;
 
         // level style compaction

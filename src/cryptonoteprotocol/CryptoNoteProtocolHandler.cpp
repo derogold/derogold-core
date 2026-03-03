@@ -1149,21 +1149,37 @@ namespace CryptoNote
             context.m_state = CryptoNoteConnectionContext::state_shutdown;
         }
 
+        /* When the node has been bootstrapped from a specific height, blocks
+           below the sync floor must not be downloaded (they are trusted via
+           the hard-coded checkpoint that was used as the bootstrap anchor).
+           We treat them as already-known so they are silently skipped. */
+        const uint32_t syncFloor = m_core.getSyncFloorHeight();
+
         bool allBlocksKnown = true;
+        uint32_t currentHeight = arg.start_height;
         for (auto &bl_id : arg.m_block_ids)
         {
+            /* Heights below the bootstrap anchor are trusted – skip silently. */
+            const bool belowSyncFloor = (syncFloor > 0 && currentHeight < syncFloor);
+
             if (allBlocksKnown)
             {
-                if (!m_core.hasBlock(bl_id))
+                if (belowSyncFloor || m_core.hasBlock(bl_id))
+                {
+                    /* Already have it (or we're in the bootstrapped-skip zone). */
+                }
+                else
                 {
                     context.m_needed_objects.push_back(bl_id);
                     allBlocksKnown = false;
                 }
             }
-            else
+            else if (!belowSyncFloor)
             {
                 context.m_needed_objects.push_back(bl_id);
             }
+
+            ++currentHeight;
         }
 
         request_missing_objects(context, false);

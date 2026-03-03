@@ -31,6 +31,13 @@ namespace DaemonConfig
         bool resync = false;
         uint32_t rewindToHeight = 0;
 
+        /* Height to begin syncing from. The node will skip downloading blocks
+           below this height and instead inject a bootstrap anchor state.  Must
+           be combined with --resync (or used on a fresh data directory) and
+           must match one of the heights in SyncBootstrapCheckpoints.h that
+           also appears in CryptoNoteCheckpoints.h.  Set to 0 to disable. */
+        uint32_t syncFromHeight = 0;
+
         bool importChain = false;
         bool exportChain = false;
         uint32_t exportNumBlocks = 0;

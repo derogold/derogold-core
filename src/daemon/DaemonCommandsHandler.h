@@ -127,5 +127,9 @@ private:
 
     bool prune_status(const std::vector<std::string> &args);
 
+    bool export_bootstrap_state(const std::vector<std::string> &args);
+
+    bool sync_height_status(const std::vector<std::string> &args);
+
     bool save(const std::vector<std::string> &args);
 };

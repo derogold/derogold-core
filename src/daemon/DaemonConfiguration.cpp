@@ -11,6 +11,7 @@
 #include "common/Util.h"
 #include "config/CliHeader.h"
 #include "config/CryptoNoteConfig.h"
+#include "config/SyncBootstrapCheckpoints.h"
 
 #include <cxxopts.hpp>
 #include <algorithm>
@@ -82,7 +83,12 @@ namespace DaemonConfig
              cxxopts::value<bool>(config.backgroundPrune)->default_value(config.backgroundPrune ? "true" : "false"))
             ("prune-depth", "When prune mode is enabled, retain at least this many recent blocks locally.",
              cxxopts::value<uint32_t>(config.pruneDepth), "<blocks>")
-            ("rewind-to-height", "Rewinds the local blockchain cache to the specified height.", cxxopts::value<uint32_t>(config.rewindToHeight), "<height>");
+            ("rewind-to-height", "Rewinds the local blockchain cache to the specified height.", cxxopts::value<uint32_t>(config.rewindToHeight), "<height>")
+            ("sync-from-height", "Skip downloading blocks below <height> by bootstrapping from a trusted checkpoint state. "
+             "Must be used on a fresh data directory (or combined with --resync). "
+             "The height must match one of the pre-computed entries in SyncBootstrapCheckpoints.h "
+             "and must also appear in the built-in checkpoint list.",
+             cxxopts::value<uint32_t>(config.syncFromHeight), "<height>");
 
         options.add_options("Import / Export")
             ("import-blockchain", "Import blockchain from dump file.", cxxopts::value<bool>(config.importChain))
@@ -159,6 +165,36 @@ namespace DaemonConfig
                              "reset the synchronization state."
                           << std::endl;
                 exit(1);
+            }
+
+            if (cli.count("sync-from-height") > 0 && config.syncFromHeight > 0)
+            {
+                /* Verify the height has a bootstrap checkpoint entry. */
+                bool found = false;
+                for (size_t i = 0; i < CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS_COUNT; ++i)
+                {
+                    if (CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS[i].height == config.syncFromHeight)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    std::cout << CryptoNote::getProjectCLIHeader()
+                              << "Error: --sync-from-height=" << config.syncFromHeight
+                              << " has no bootstrap checkpoint entry in SyncBootstrapCheckpoints.h.\n"
+                              << "Available heights: ";
+                    for (size_t i = 0; i < CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS_COUNT; ++i)
+                    {
+                        if (i > 0) std::cout << ", ";
+                        std::cout << CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS[i].height;
+                    }
+                    std::cout << "\nYou can add a new entry by running: export_bootstrap_state <height>\n"
+                              << "on a fully-synced node and updating src/config/SyncBootstrapCheckpoints.h."
+                              << std::endl;
+                    exit(1);
+                }
             }
 
             if (cli.count("max-export-blocks") > 0 && config.exportNumBlocks == 0)
@@ -425,6 +461,11 @@ namespace DaemonConfig
         {
             config.transactionValidationThreads = j["transaction-validation-threads"].GetInt();
         }
+
+        if (j.HasMember("sync-from-height"))
+        {
+            config.syncFromHeight = j["sync-from-height"].GetUint();
+        }
     }
 
     Document asJSON(const DaemonConfiguration &config)
@@ -501,6 +542,7 @@ namespace DaemonConfig
         j.AddMember("prune-depth", config.pruneDepth, alloc);
 
         j.AddMember("transaction-validation-threads", config.transactionValidationThreads, alloc);
+        j.AddMember("sync-from-height", config.syncFromHeight, alloc);
 
         return j;
     }

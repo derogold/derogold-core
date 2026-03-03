@@ -18,6 +18,7 @@
 #include "common/Util.h"
 #include "config/CliHeader.h"
 #include "config/CryptoNoteCheckpoints.h"
+#include "config/SyncBootstrapCheckpoints.h"
 #include "cryptonotecore/Core.h"
 #include "cryptonotecore/Currency.h"
 #include "cryptonotecore/DBUtils.h"
@@ -39,6 +40,7 @@
 #endif
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <future>
 #include <thread>
 
@@ -364,6 +366,84 @@ int main(int argc, char *argv[])
         ccore->load();
 
         logger(INFO) << "Core initialized OK";
+
+        /* --sync-from-height bootstrap ------------------------------------------ */
+        if (config.syncFromHeight > 0)
+        {
+            const uint32_t existingSyncFloor = ccore->getSyncFloorHeight();
+            const uint32_t topIndex          = ccore->getTopBlockIndex();
+
+            if (existingSyncFloor > 0)
+            {
+                logger(INFO) << "Resuming bootstrapped node: sync floor is already at height "
+                             << existingSyncFloor << ", chain top at " << topIndex << ".";
+            }
+            else if (topIndex > 0)
+            {
+                logger(WARNING)
+                    << "--sync-from-height=" << config.syncFromHeight
+                    << " was requested but the database already contains " << (topIndex + 1)
+                    << " blocks.  Ignoring bootstrap injection (use --resync first for a "
+                       "clean start from height " << config.syncFromHeight << ").";
+            }
+            else
+            {
+                /* Fresh database (only genesis).  Find the matching bootstrap entry. */
+                const CryptoNote::BootstrapCheckpoint *entry = nullptr;
+                for (size_t i = 0; i < CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS_COUNT; ++i)
+                {
+                    if (CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS[i].height == config.syncFromHeight)
+                    {
+                        entry = &CryptoNote::SYNC_BOOTSTRAP_CHECKPOINTS[i];
+                        break;
+                    }
+                }
+
+                if (entry == nullptr)
+                {
+                    logger(ERROR) << "No bootstrap checkpoint found for height "
+                                  << config.syncFromHeight
+                                  << " – cannot bootstrap. Exiting.";
+                    return 1;
+                }
+
+                /* Parse the hex block hash from the bootstrap entry. */
+                Crypto::Hash anchorHash;
+                if (!Common::podFromHex(std::string(entry->blockHash), anchorHash))
+                {
+                    logger(ERROR)
+                        << "Bootstrap checkpoint for height " << entry->height
+                        << " has an invalid block hash: " << entry->blockHash;
+                    return 1;
+                }
+
+                logger(INFO)
+                    << "Bootstrapping node from height " << entry->height
+                    << " (hash " << entry->blockHash << ") ...";
+
+                /* Use the block timestamp from the checkpoint height's hash to
+                   pick a reasonable timestamp.  We approximate it by using the
+                   current time minus the expected block time since that height.
+                   The anchor's exact timestamp is not critical for correctness
+                   (it only affects difficulty calculation which transitions into
+                   real block data once the anchor height + 1 is synced). */
+                const uint64_t anchorTimestamp =
+                    static_cast<uint64_t>(std::time(nullptr));
+
+                ccore->bootstrapFromHeight(
+                    entry->height,
+                    anchorHash,
+                    anchorTimestamp,
+                    entry->alreadyGeneratedCoins,
+                    entry->cumulativeDifficulty,
+                    entry->alreadyGeneratedTransactions);
+
+                logger(INFO)
+                    << "Bootstrap complete. Node will sync from height "
+                    << entry->height << " onwards.";
+            }
+        }
+        /* ----------------------------------------------------------------------- */
 
         std::string error;
         std::string filepath = "blockchain.dump";

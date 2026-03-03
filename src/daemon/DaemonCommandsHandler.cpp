@@ -7,8 +7,10 @@
 
 #include "JsonHelper.h"
 #include "version.h"
+#include "config/SyncBootstrapCheckpoints.h"
 
 #include <boost/format.hpp>
+#include <common/StringTools.h>
 #include <common/Util.h>
 #include <IDataBase.h>
 #include <cryptonotecore/Core.h>
@@ -160,6 +162,17 @@ DaemonCommandsHandler::DaemonCommandsHandler(
         "prune_status",
         [this](const std::vector<std::string> &args) { return prune_status(args); },
         "Show prune mode and capability status"
+    );
+    m_consoleHandler.setHandler(
+        "export_bootstrap_state",
+        [this](const std::vector<std::string> &args) { return export_bootstrap_state(args); },
+        "export_bootstrap_state <height> – Print the BootstrapCheckpoint record for <height>. "
+        "Run this on a fully-synced node and copy the output into SyncBootstrapCheckpoints.h."
+    );
+    m_consoleHandler.setHandler(
+        "sync_height_status",
+        [this](const std::vector<std::string> &args) { return sync_height_status(args); },
+        "Show whether this node was started with --sync-from-height and what the sync floor is"
     );
     m_consoleHandler.setHandler(
         "save",
@@ -941,6 +954,100 @@ bool DaemonCommandsHandler::prune_status(const std::vector<std::string> &args)
               << SuccessMsg(m_config.backgroundPrune ? "Enabled (async)" : "Disabled") << std::endl;
     std::cout << InformationMsg("Prune Depth: ") << SuccessMsg(pruneDepth) << std::endl;
     std::cout << InformationMsg("Approx Prune Floor Height: ") << SuccessMsg(pruneFloor) << std::endl;
+    return true;
+}
+
+bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string> &args)
+{
+    if (args.empty())
+    {
+        std::cout << InformationMsg("Usage: export_bootstrap_state <height>") << std::endl
+                  << "Prints a BootstrapCheckpoint record for the given height." << std::endl
+                  << "Run this on a fully-synced node and add the output to" << std::endl
+                  << "  src/config/SyncBootstrapCheckpoints.h" << std::endl;
+        return true;
+    }
+
+    uint32_t targetHeight = 0;
+    try
+    {
+        targetHeight = static_cast<uint32_t>(std::stoul(args[0]));
+    }
+    catch (const std::exception &)
+    {
+        std::cout << WarningMsg("Invalid height: ") << args[0] << std::endl;
+        return false;
+    }
+
+    const uint64_t topIndex = m_core.getTopBlockIndex();
+    if (targetHeight == 0 || targetHeight > topIndex)
+    {
+        std::cout << WarningMsg("Height must be between 1 and ")
+                  << topIndex << " (current chain top)." << std::endl;
+        return false;
+    }
+
+    /* Fetch the block hash at targetHeight. */
+    const Crypto::Hash blockHash = m_core.getBlockHashByIndex(targetHeight);
+
+    /* Walk from genesis to targetHeight to accumulate coin & tx counts.
+     * For a fully-synced node this is read from DB metadata per-block. */
+    uint64_t alreadyGeneratedCoins        = 0;
+    uint64_t cumulativeDifficulty         = 0;
+    uint64_t alreadyGeneratedTransactions = 0;
+
+    try
+    {
+        CryptoNote::BlockDetails details = m_core.getBlockDetails(blockHash);
+        alreadyGeneratedCoins        = details.alreadyGeneratedCoins;
+        alreadyGeneratedTransactions = details.alreadyGeneratedTransactions;
+        cumulativeDifficulty         = m_core.getCumulativeDifficulty(targetHeight);
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << WarningMsg("Could not fetch block details: ") << e.what() << std::endl;
+        return false;
+    }
+
+    std::cout << std::endl
+              << InformationMsg("=== Bootstrap Checkpoint for height ") << targetHeight
+              << InformationMsg(" ===") << std::endl
+              << "Copy this struct into src/config/SyncBootstrapCheckpoints.h :"
+              << std::endl << std::endl;
+
+    std::cout << "        {" << std::endl
+              << "            " << targetHeight << "," << std::endl
+              << "            \"" << Common::podToHex(blockHash) << "\"," << std::endl
+              << "            UINT64_C(" << alreadyGeneratedCoins << "), // alreadyGeneratedCoins" << std::endl
+              << "            UINT64_C(" << cumulativeDifficulty << "), // cumulativeDifficulty" << std::endl
+              << "            UINT64_C(" << alreadyGeneratedTransactions << "), // alreadyGeneratedTransactions" << std::endl
+              << "        }," << std::endl << std::endl;
+
+    std::cout << InformationMsg("Also verify height ") << targetHeight
+              << InformationMsg(" is in CryptoNoteCheckpoints.h with hash ")
+              << Common::podToHex(blockHash) << "." << std::endl;
+
+    return true;
+}
+
+bool DaemonCommandsHandler::sync_height_status(const std::vector<std::string> &args)
+{
+    const uint32_t syncFloor = m_core.getSyncFloorHeight();
+    const uint64_t topIndex  = m_core.getTopBlockIndex();
+
+    if (syncFloor == 0)
+    {
+        std::cout << InformationMsg("Sync-from-height: ")
+                  << SuccessMsg("disabled (synced from genesis)") << std::endl;
+    }
+    else
+    {
+        std::cout << InformationMsg("Sync floor height: ") << SuccessMsg(syncFloor) << std::endl
+                  << InformationMsg("Current chain top:  ") << SuccessMsg(topIndex) << std::endl
+                  << InformationMsg("Mode: ")
+                  << SuccessMsg("bootstrapped – blocks below ") << syncFloor
+                  << SuccessMsg(" are trusted via checkpoint, not stored locally") << std::endl;
+    }
     return true;
 }
 
