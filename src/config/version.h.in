@@ -3,7 +3,7 @@
 
 #define PROJECT_NAME "DeroGold"
 #define PROJECT_SITE "https://derogold.com"
-#define PROJECT_COPYRIGHT "Copyright 2018-2024, The DeroGold Developers"
+#define PROJECT_COPYRIGHT "Copyright 2018-2026, The DeroGold Developers"
 
 #define APP_VER_MAJOR ${PROJECT_VERSION_MAJOR}
 #define APP_VER_MINOR ${PROJECT_VERSION_MINOR}
