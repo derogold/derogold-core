@@ -33,8 +33,9 @@ jobs:
             compiler: gcc
             install: >-
               build-essential
-              cmake
               curl
+              gcc-9
+              g++-9
               git
               ninja-build
               pkg-config
@@ -44,21 +45,21 @@ jobs:
             configure_preset: linux-x64-gcc-package
             build_preset: linux-x64-gcc-package
 
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04
             arch: arm64
             compiler: gcc
             install: >-
-              build-essential
-              cmake
               curl
+              gcc-9-aarch64-linux-gnu
+              g++-9-aarch64-linux-gnu
               git
               ninja-build
               pkg-config
               tar
               unzip
               zip
-            configure_preset: linux-arm64-gcc-package
-            build_preset: linux-arm64-gcc-package
+            configure_preset: linux-arm64-gcc-cross-package
+            build_preset: linux-arm64-gcc-cross-package
 
     steps:
       - name: Checkout
@@ -76,6 +77,24 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y ${{ matrix.install }}
             }
+          }
+
+      - name: Pin GCC 9 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ("${{ matrix.arch }}" -eq "x64")
+          {
+            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9
+            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9
+            sudo update-alternatives --set gcc /usr/bin/gcc-9
+            sudo update-alternatives --set g++ /usr/bin/g++-9
+          }
+          elseif ("${{ matrix.arch }}" -eq "arm64")
+          {
+            sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9 9
+            sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9 9
+            sudo update-alternatives --set aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9
+            sudo update-alternatives --set aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9
           }
 
       - name: Install CMake
