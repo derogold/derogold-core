@@ -382,7 +382,6 @@ namespace CryptoNote
 
     const char *const SEED_NODES[] = {
         "46.214.70.197:42079", // Ole Cuvee
-        "217.232.230.58:42069",
         "195.7.5.101:42069",
 	"dego-node.gncdx.net:42069",
 	"185.32.162.191:40696",
