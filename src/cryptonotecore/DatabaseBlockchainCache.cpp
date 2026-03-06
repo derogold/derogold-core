@@ -2514,8 +2514,14 @@ namespace CryptoNote
             throw std::runtime_error(res2.message());
         }
 
-        /* Invalidate in-memory caches so next access picks up the anchor. */
+        /* Invalidate in-memory caches so next access picks up the anchor.
+         * Also clear unitsCache: addGenesisBlock() populated it with the genesis
+         * block before bootstrapFromHeight() was called.  After the anchor injection
+         * getTopBlockIndex() jumps to anchorHeight, so cacheStartIndex would be
+         * miscalculated as anchorHeight and the genesis entry would be treated as
+         * the block at that height – corrupting LWMA input data. */
         topBlockIndex = boost::none;
+        unitsCache.clear();
         topBlockHash  = boost::none;
 
         logger(Logging::INFO) << "injectBootstrapAnchor: complete, DB top is now " << getTopBlockIndex();
