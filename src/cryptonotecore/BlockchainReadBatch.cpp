@@ -138,6 +138,12 @@ BlockchainReadBatch &BlockchainReadBatch::requestTransactionsCount()
     return *this;
 }
 
+BlockchainReadBatch &BlockchainReadBatch::requestPruneFloor()
+{
+    state.pruneFloor.second = true;
+    return *this;
+}
+
 BlockchainReadBatch &BlockchainReadBatch::requestKeyOutputInfo(
     IBlockchainCache::Amount amount,
     IBlockchainCache::GlobalOutputIndex globalIndex)
@@ -152,6 +158,7 @@ BlockchainReadResult BlockchainReadBatch::extractResult()
     auto st = std::move(state);
     state.lastBlockIndex = {0, false};
     state.keyOutputAmountsCount = {{}, false};
+    state.pruneFloor = {0, false};
 
     resultSubmitted = false;
     return BlockchainReadResult(st);
@@ -192,6 +199,11 @@ std::vector<std::string> BlockchainReadBatch::getRawKeys() const
     {
         rawKeys.emplace_back(
             DB::serializeKey(DB::TRANSACTION_HASH_TO_TRANSACTION_INFO_PREFIX, DB::TRANSACTIONS_COUNT_KEY));
+    }
+
+    if (state.pruneFloor.second)
+    {
+        rawKeys.emplace_back(DB::serializeKey(DB::PRUNE_FLOOR_PREFIX, DB::PRUNE_FLOOR_KEY));
     }
 
     assert(!rawKeys.empty());
@@ -292,6 +304,11 @@ const KeyOutputKeyResult &BlockchainReadResult::getKeyOutputInfo() const
     return state.keyOutputKeys;
 }
 
+const std::pair<uint32_t, bool> &BlockchainReadResult::getPruneFloor() const
+{
+    return state.pruneFloor;
+}
+
 void BlockchainReadBatch::submitRawResult(const std::vector<std::string> &values, const std::vector<bool> &resultStates)
 {
     assert(state.size() == values.size());
@@ -318,6 +335,7 @@ void BlockchainReadBatch::submitRawResult(const std::vector<std::string> &values
     DB::deserializeValue(state.lastBlockIndex, iter, DB::BLOCK_INDEX_TO_BLOCK_HASH_PREFIX);
     DB::deserializeValue(state.keyOutputAmountsCount, iter, DB::KEY_OUTPUT_AMOUNTS_COUNT_PREFIX);
     DB::deserializeValue(state.transactionsCount, iter, DB::TRANSACTION_HASH_TO_TRANSACTION_INFO_PREFIX);
+    DB::deserializeValue(state.pruneFloor, iter, DB::PRUNE_FLOOR_PREFIX);
 
     assert(iter == range.end());
 
@@ -342,7 +360,8 @@ BlockchainReadState::BlockchainReadState(BlockchainReadState &&state):
     keyOutputAmounts(std::move(state.keyOutputAmounts)),
     transactionCountsByPaymentIds(std::move(state.transactionCountsByPaymentIds)),
     transactionHashesByPaymentIds(std::move(state.transactionHashesByPaymentIds)),
-    transactionsCount(std::move(state.transactionsCount))
+    transactionsCount(std::move(state.transactionsCount)),
+    pruneFloor(std::move(state.pruneFloor))
 {
 }
 
@@ -354,7 +373,7 @@ size_t BlockchainReadState::size() const
            + closestTimestampBlockIndex.size() + keyOutputAmounts.size() + transactionCountsByPaymentIds.size()
            + transactionHashesByPaymentIds.size() + blockHashesByTimestamp.size() + keyOutputKeys.size()
            + (lastBlockIndex.second ? 1 : 0) + (keyOutputAmountsCount.second ? 1 : 0)
-           + (transactionsCount.second ? 1 : 0);
+           + (transactionsCount.second ? 1 : 0) + (pruneFloor.second ? 1 : 0);
 }
 
 BlockchainReadResult::BlockchainReadResult(BlockchainReadResult &&result): state(std::move(result.state)) {}

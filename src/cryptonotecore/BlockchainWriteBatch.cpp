@@ -236,6 +236,12 @@ BlockchainWriteBatch &BlockchainWriteBatch::removeKeyOutputInfo(IBlockchainCache
     return *this;
 }
 
+BlockchainWriteBatch &BlockchainWriteBatch::setPruneFloor(uint32_t pruneFloor)
+{
+    rawDataToInsert.emplace_back(DB::serialize(DB::PRUNE_FLOOR_PREFIX, DB::PRUNE_FLOOR_KEY, pruneFloor));
+    return *this;
+}
+
 std::vector<std::pair<std::string, std::string>> BlockchainWriteBatch::extractRawDataToInsert()
 {
     return std::move(rawDataToInsert);

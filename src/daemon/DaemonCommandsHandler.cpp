@@ -947,13 +947,19 @@ bool DaemonCommandsHandler::prune_status(const std::vector<std::string> &args)
 {
     const uint64_t height = m_core.getTopBlockIndex() + 1;
     const uint64_t pruneDepth = m_config.pruneDepth;
-    const uint64_t pruneFloor = height > pruneDepth ? height - pruneDepth : 0;
+    const uint64_t targetFloor = height > pruneDepth ? height - pruneDepth : 0;
+    const uint32_t actualFloor = m_core.getPruneFloor();
 
     std::cout << InformationMsg("Pruned Node: ") << SuccessMsg(m_config.prune ? "Yes" : "No") << std::endl;
     std::cout << InformationMsg("Background Prune Task: ")
               << SuccessMsg(m_config.backgroundPrune ? "Enabled (async)" : "Disabled") << std::endl;
     std::cout << InformationMsg("Prune Depth: ") << SuccessMsg(pruneDepth) << std::endl;
-    std::cout << InformationMsg("Approx Prune Floor Height: ") << SuccessMsg(pruneFloor) << std::endl;
+    std::cout << InformationMsg("Target Prune Floor Height: ") << SuccessMsg(targetFloor) << std::endl;
+    std::cout << InformationMsg("Actual Prune Floor Height: ") << SuccessMsg(actualFloor) << std::endl;
+    if (actualFloor == 0)
+    {
+        std::cout << WarningMsg("  (no pruning performed yet)") << std::endl;
+    }
     return true;
 }
 

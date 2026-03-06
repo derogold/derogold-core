@@ -86,6 +86,8 @@ namespace CryptoNote
 
         std::pair<uint64_t, bool> transactionsCount = {0, false};
 
+        std::pair<uint32_t, bool> pruneFloor = {0, false};
+
         BlockchainReadState() = default;
 
         BlockchainReadState(const BlockchainReadState &) = default;
@@ -140,6 +142,8 @@ namespace CryptoNote
 
         const KeyOutputKeyResult &getKeyOutputInfo() const;
 
+        const std::pair<uint32_t, bool> &getPruneFloor() const;
+
       private:
         BlockchainReadState state;
     };
@@ -191,6 +195,8 @@ namespace CryptoNote
 
         BlockchainReadBatch &
             requestKeyOutputInfo(IBlockchainCache::Amount amount, IBlockchainCache::GlobalOutputIndex globalIndex);
+
+        BlockchainReadBatch &requestPruneFloor();
 
         std::vector<std::string> getRawKeys() const override;
 

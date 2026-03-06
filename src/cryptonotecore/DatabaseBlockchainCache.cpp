@@ -2021,6 +2021,12 @@ namespace CryptoNote
 
     RawBlock DatabaseBlockchainCache::getBlockByIndex(uint32_t index) const
     {
+        if (index > 0 && index < getPruneFloor())
+        {
+            throw std::out_of_range(
+                "Block " + std::to_string(index) + " has been pruned (prune floor: "
+                + std::to_string(getPruneFloor()) + ")");
+        }
         auto batch = BlockchainReadBatch().requestRawBlock(index);
         auto res = readDatabase(batch);
         return std::move(res.getRawBlocks().at(index));
@@ -2496,6 +2502,68 @@ namespace CryptoNote
         topBlockHash = genesisBlock.getBlockHash();
 
         unitsCache.push_back(blockInfo);
+    }
+
+    uint32_t DatabaseBlockchainCache::getPruneFloor() const
+    {
+        if (!m_pruneFloor)
+        {
+            auto batch = BlockchainReadBatch().requestPruneFloor();
+            auto res = readDatabase(batch);
+            const auto &pf = res.getPruneFloor();
+            m_pruneFloor = pf.second ? pf.first : 0;
+        }
+        return *m_pruneFloor;
+    }
+
+    void DatabaseBlockchainCache::pruneRawBlocksBefore(uint32_t height)
+    {
+        /* Never prune genesis block (index 0); clamp to 1. */
+        if (height <= 1)
+        {
+            return;
+        }
+
+        const uint32_t currentFloor = getPruneFloor();
+        if (height <= currentFloor)
+        {
+            logger(Logging::DEBUGGING) << "pruneRawBlocksBefore: height " << height
+                                       << " already below prune floor " << currentFloor << ", nothing to do.";
+            return;
+        }
+
+        constexpr uint32_t BATCH_SIZE = 5000;
+        uint32_t from = std::max(currentFloor, uint32_t(1)); // never delete genesis
+        uint32_t deleted = 0;
+
+        logger(Logging::INFO) << "pruneRawBlocksBefore: deleting raw blocks [" << from << ", " << height << ").";
+
+        while (from < height)
+        {
+            const uint32_t to = std::min(from + BATCH_SIZE, height);
+
+            BlockchainWriteBatch batch;
+            for (uint32_t i = from; i < to; ++i)
+            {
+                batch.removeRawBlock(i);
+            }
+            batch.setPruneFloor(to);
+
+            auto err = database.write(batch);
+            if (err)
+            {
+                logger(Logging::ERROR) << "pruneRawBlocksBefore: write failed at [" << from << ", " << to
+                                       << "): " << err.message();
+                throw std::runtime_error("pruneRawBlocksBefore write failed: " + err.message());
+            }
+
+            deleted += (to - from);
+            from = to;
+            m_pruneFloor = to;
+        }
+
+        logger(Logging::INFO) << "pruneRawBlocksBefore: deleted " << deleted
+                              << " raw block(s), new prune floor = " << *m_pruneFloor << ".";
     }
 
 } // namespace CryptoNote

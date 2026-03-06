@@ -250,6 +250,10 @@ namespace CryptoNote
                                          uint64_t cumulativeDifficulty,
                                          uint64_t alreadyGeneratedTransactions) override;
 
+        virtual void pruneRawBlocksBefore(uint32_t height) override;
+
+        virtual uint32_t getPruneFloor() const override;
+
         CryptoNote::RawBlock getRawBlock(uint32_t blockIndex) const;
 
         CryptoNote::RawBlock getRawBlock(const Crypto::Hash &blockHash) const;

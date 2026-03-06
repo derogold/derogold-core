@@ -503,6 +503,26 @@ int main(int argc, char *argv[])
         if (config.prune)
         {
             logger(INFO) << "Prune DB mode enabled with depth " << config.pruneDepth << ".";
+
+            /* One-shot startup prune: delete raw blocks below the prune floor right
+             * now so that the DB reflects the configured depth immediately on launch,
+             * even when --background-prune is off. */
+            const uint64_t startupHeight = ccore->getTopBlockIndex() + 1;
+            const uint32_t startupFloor = startupHeight > config.pruneDepth
+                                              ? static_cast<uint32_t>(startupHeight - config.pruneDepth)
+                                              : 0;
+            if (startupFloor > ccore->getPruneFloor())
+            {
+                logger(INFO) << "Startup prune: removing raw blocks below height " << startupFloor << ".";
+                try
+                {
+                    ccore->pruneRawBlocksBefore(startupFloor);
+                }
+                catch (const std::exception &e)
+                {
+                    logger(WARNING) << "Startup prune failed: " << e.what();
+                }
+            }
         }
         else
         {
@@ -610,25 +630,46 @@ int main(int argc, char *argv[])
                                                                                     "background (depth "
                                                                                  << depth << ").";
 
-                                                                             uint64_t rawBlockSlotsProcessed = 0;
+                                                                             uint32_t pruneFloor = 0;
                                                                              try
                                                                              {
                                                                                  const uint64_t height =
                                                                                      ccore->getTopBlockIndex() + 1;
-                                                                                 rawBlockSlotsProcessed =
+                                                                                 pruneFloor =
                                                                                      height > depth
-                                                                                         ? height - depth
+                                                                                         ? static_cast<uint32_t>(
+                                                                                               height - depth)
                                                                                          : 0;
                                                                              }
-                                                                             catch (const std::exception &)
+                                                                             catch (const std::exception &e)
                                                                              {
+                                                                                 logger(WARNING)
+                                                                                     << "Prune pass: failed to get "
+                                                                                        "chain height: "
+                                                                                     << e.what();
                                                                                  return;
+                                                                             }
+
+                                                                             if (pruneFloor > 0)
+                                                                             {
+                                                                                 try
+                                                                                 {
+                                                                                     ccore->pruneRawBlocksBefore(
+                                                                                         pruneFloor);
+                                                                                 }
+                                                                                 catch (const std::exception &e)
+                                                                                 {
+                                                                                     logger(WARNING)
+                                                                                         << "Prune pass failed: "
+                                                                                         << e.what();
+                                                                                     return;
+                                                                                 }
                                                                              }
 
                                                                              logger(INFO)
                                                                                  << "Periodic prune pass completed. "
-                                                                                    "Raw block slots processed: "
-                                                                                 << rawBlockSlotsProcessed;
+                                                                                    "Prune floor now at: "
+                                                                                 << pruneFloor;
                                                                          });
 
                                               nextRun = std::chrono::steady_clock::now() + prunePassInterval;

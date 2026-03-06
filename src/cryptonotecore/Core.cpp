@@ -422,7 +422,15 @@ namespace CryptoNote
                 uint32_t blockIndex = blockchainSegment->getBlockIndex(hash);
                 assert(blockIndex <= blockchainSegment->getTopBlockIndex());
 
-                blocks.push_back(blockchainSegment->getBlockByIndex(blockIndex));
+                try
+                {
+                    blocks.push_back(blockchainSegment->getBlockByIndex(blockIndex));
+                }
+                catch (const std::out_of_range &)
+                {
+                    /* Block has been pruned; treat it the same as a missed block. */
+                    missedHashes.push_back(hash);
+                }
             }
         }
     }
@@ -2950,6 +2958,18 @@ namespace CryptoNote
         logger(Logging::INFO)
             << "Bootstrap anchor injected at height " << bootstrapHeight
             << ". Sync will begin from this height.";
+    }
+
+    void Core::pruneRawBlocksBefore(uint32_t height)
+    {
+        throwIfNotInitialized();
+        chainsLeaves[0]->pruneRawBlocksBefore(height);
+    }
+
+    uint32_t Core::getPruneFloor() const
+    {
+        throwIfNotInitialized();
+        return chainsLeaves[0]->getPruneFloor();
     }
 
     CryptoNote::RawBlock Core::getRawBlock(uint32_t blockIndex) const

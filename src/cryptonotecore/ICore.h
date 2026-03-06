@@ -240,5 +240,12 @@ namespace CryptoNote
                                          uint64_t alreadyGeneratedCoins,
                                          uint64_t cumulativeDifficulty,
                                          uint64_t alreadyGeneratedTransactions) = 0;
+
+        /* Deletes raw block blobs for all indices below @p height on the main chain.
+         * All indexed data is preserved.  Safe to call from a background thread. */
+        virtual void pruneRawBlocksBefore(uint32_t height) = 0;
+
+        /* Returns the current prune floor (first block index with raw data). */
+        virtual uint32_t getPruneFloor() const = 0;
     };
 } // namespace CryptoNote

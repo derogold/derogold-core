@@ -268,6 +268,13 @@ namespace CryptoNote
         virtual std::vector<RawBlock>
             getNonEmptyBlocks(const uint64_t startHeight, const size_t blockCount) const override;
 
+        /* Deletes raw block blobs for all block indices in [current prune floor, height).
+         * Indexed data (key images, spent outputs, tx info) is preserved.
+         * The new prune floor is persisted to the database. */
+        void pruneRawBlocksBefore(uint32_t height) override;
+
+        uint32_t getPruneFloor() const override;
+
       private:
         const Currency &currency;
 
@@ -278,6 +285,11 @@ namespace CryptoNote
         mutable boost::optional<uint32_t> topBlockIndex;
 
         mutable boost::optional<Crypto::Hash> topBlockHash;
+
+        /* Cached prune floor (first block index whose raw data is still present).
+         * Loaded lazily from the DB on first call to getPruneFloor() or
+         * pruneRawBlocksBefore(). boost::none means "not yet loaded from DB". */
+        mutable boost::optional<uint32_t> m_pruneFloor;
 
         mutable boost::optional<uint64_t> transactionsCount;
 

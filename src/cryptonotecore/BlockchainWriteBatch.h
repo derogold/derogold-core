@@ -69,6 +69,8 @@ namespace CryptoNote
         BlockchainWriteBatch &removeKeyOutputInfo(IBlockchainCache::Amount amount,
                                                   IBlockchainCache::GlobalOutputIndex globalIndex);
 
+        BlockchainWriteBatch &setPruneFloor(uint32_t pruneFloor);
+
         std::vector<std::pair<std::string, std::string>> extractRawDataToInsert() override;
 
         std::vector<std::string> extractRawKeysToRemove() override;

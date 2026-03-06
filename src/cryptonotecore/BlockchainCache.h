@@ -107,6 +107,10 @@ namespace CryptoNote
 
         void rewind(const uint64_t height) override;
 
+        /* Child segment caches never hold prunable raw blocks; these are no-ops. */
+        void pruneRawBlocksBefore(uint32_t height) override {}
+        uint32_t getPruneFloor() const override { return 0; }
+
         virtual void pushBlock(
             const CachedBlock &cachedBlock,
             const std::vector<CachedTransaction> &cachedTransactions,

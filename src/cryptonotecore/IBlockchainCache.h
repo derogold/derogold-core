@@ -116,6 +116,16 @@ namespace CryptoNote
 
         virtual void rewind(const uint64_t blockIndex) = 0;
 
+        /* Deletes raw block blobs (block header + transaction data) for all block
+         * indices strictly below @p height.  All indexed data (key images, spent
+         * outputs, transaction indexes) is left intact.  Child segment caches
+         * (BlockchainCache) ignore this call; only DatabaseBlockchainCache acts. */
+        virtual void pruneRawBlocksBefore(uint32_t height) = 0;
+
+        /* Returns the current prune floor: the first block index whose raw data
+         * is still available locally.  Returns 0 if no pruning has occurred. */
+        virtual uint32_t getPruneFloor() const = 0;
+
         virtual void pushBlock(
             const CachedBlock &cachedBlock,
             const std::vector<CachedTransaction> &cachedTransactions,

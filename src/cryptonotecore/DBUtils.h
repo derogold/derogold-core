@@ -37,10 +37,12 @@ namespace CryptoNote::DB
     const std::string TIMESTAMP_TO_BLOCKHASHES_PREFIX = "g";
     const std::string KEY_OUTPUT_AMOUNTS_COUNT_PREFIX = "h";
     const std::string KEY_OUTPUT_KEY_PREFIX = "j";
+    const std::string PRUNE_FLOOR_PREFIX = "p";
 
     const std::string LAST_BLOCK_INDEX_KEY = "last_block_index";
     const std::string KEY_OUTPUT_AMOUNTS_COUNT_KEY = "key_amounts_count";
     const std::string TRANSACTIONS_COUNT_KEY = "txs_count";
+    const std::string PRUNE_FLOOR_KEY = "prune_floor";
 
     template<class Value> std::string serialize(const Value &value, const std::string &name)
     {
