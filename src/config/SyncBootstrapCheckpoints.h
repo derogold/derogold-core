@@ -27,6 +27,12 @@ namespace CryptoNote
      *   cumulativeDifficulty – Sum of block difficulties from genesis through
      *                          this block, inclusive.
      *   alreadyGeneratedTransactions – Total tx count through this block.
+     *   timestamp            – Unix timestamp of this block as recorded on-chain.
+     *                          Used to seed synthetic pre-anchor block timestamps
+     *                          so that the first real block after the anchor passes
+     *                          the median-timestamp validation.  Set to 0 if
+     *                          unknown (falls back to wall-clock; safe due to the
+     *                          sync-floor timestamp bypass in Core.cpp).
      *
      * How to add a new entry
      * ----------------------
@@ -44,6 +50,7 @@ namespace CryptoNote
         uint64_t    alreadyGeneratedCoins;
         uint64_t    cumulativeDifficulty;
         uint64_t    alreadyGeneratedTransactions;
+        uint64_t    timestamp; // 0 = unknown, falls back to wall-clock
     };
 
     /**
@@ -61,7 +68,8 @@ namespace CryptoNote
             "4c97a2ff7a09aa38eb5ee2a49afa0d05b9071f470e3afc1a873a24607100ae77", // replace
             UINT64_C(963502374716270),   // alreadyGeneratedCoins  – replace
             UINT64_C(26545226639472),   // cumulativeDifficulty   – replace
-            UINT64_C(3071175),   // alreadyGeneratedTransactions – replace
+            UINT64_C(3071175),          // alreadyGeneratedTransactions – replace
+            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
         },
         /* height 1 500 000 – fill in with: export_bootstrap_state 1500000 */
         {
@@ -70,6 +78,7 @@ namespace CryptoNote
             UINT64_C(1228253003805553),
             UINT64_C(28983155871648),
             UINT64_C(18652499),
+            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
         },
         /* height 2 000 000 – fill in with: export_bootstrap_state 2000000 */
         {
@@ -78,22 +87,25 @@ namespace CryptoNote
             UINT64_C(1484020623125170),
             UINT64_C(30581354740331),
             UINT64_C(24699942),
+            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
         },
-        /* height 2 200 000 – fill in with: export_bootstrap_state 2200000 */
+        /* height 2 500 000 – fill in with: export_bootstrap_state 2500000 */
         {
             2500000,
             "29ee0c13fb06f6ca3e4433957bd5d0d2a837e2cd95d473e08633caf100cea64b", // replace
             UINT64_C(1731799467373277),
             UINT64_C(71990059621657),
             UINT64_C(30406065),
+            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
         },
-        /* height 2 400 000 – fill in with: export_bootstrap_state 2400000 */
+        /* height 2 700 000 – fill in with: export_bootstrap_state 2700000 */
         {
             2700000,
-            "088438ac255023638252a926c0ff4177a90224a90453d5764902d1f844e3394c", // replace
+            "088438ac255023638252a926c0ff4177a90224a90453d5764902d1f844e3394c",
             UINT64_C(1829293564005886),
             UINT64_C(89906083563503),
             UINT64_C(31263053),
+            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
         },
     };
 

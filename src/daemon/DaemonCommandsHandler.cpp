@@ -1002,12 +1002,14 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
     uint64_t cumulativeDifficulty         = 0;
     uint64_t alreadyGeneratedTransactions = 0;
 
+    uint64_t blockTimestamp = 0;
     try
     {
         CryptoNote::BlockDetails details = m_core.getBlockDetails(blockHash);
         alreadyGeneratedCoins        = details.alreadyGeneratedCoins;
         alreadyGeneratedTransactions = details.alreadyGeneratedTransactions;
         cumulativeDifficulty         = m_core.getCumulativeDifficulty(targetHeight);
+        blockTimestamp               = details.timestamp;
     }
     catch (const std::exception &e)
     {
@@ -1027,6 +1029,7 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
               << "            UINT64_C(" << alreadyGeneratedCoins << "), // alreadyGeneratedCoins" << std::endl
               << "            UINT64_C(" << cumulativeDifficulty << "), // cumulativeDifficulty" << std::endl
               << "            UINT64_C(" << alreadyGeneratedTransactions << "), // alreadyGeneratedTransactions" << std::endl
+              << "            UINT64_C(" << blockTimestamp << "), // timestamp" << std::endl
               << "        }," << std::endl << std::endl;
 
     std::cout << InformationMsg("Also verify height ") << targetHeight

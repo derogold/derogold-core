@@ -421,14 +421,16 @@ int main(int argc, char *argv[])
                     << "Bootstrapping node from height " << entry->height
                     << " (hash " << entry->blockHash << ") ...";
 
-                /* Use the block timestamp from the checkpoint height's hash to
-                   pick a reasonable timestamp.  We approximate it by using the
-                   current time minus the expected block time since that height.
-                   The anchor's exact timestamp is not critical for correctness
-                   (it only affects difficulty calculation which transitions into
-                   real block data once the anchor height + 1 is synced). */
-                const uint64_t anchorTimestamp =
-                    static_cast<uint64_t>(std::time(nullptr));
+                /* Use the recorded on-chain timestamp from the checkpoint when
+                   available.  This ensures synthetic pre-anchor blocks get
+                   historically correct timestamps so that the first real block
+                   after the anchor passes the median-timestamp check.  Fall back
+                   to wall-clock if the checkpoint has no timestamp (== 0); a
+                   sync-floor bypass in Core::validateBlock keeps things safe even
+                   in that case. */
+                const uint64_t anchorTimestamp = (entry->timestamp != 0)
+                    ? entry->timestamp
+                    : static_cast<uint64_t>(std::time(nullptr));
 
                 ccore->bootstrapFromHeight(
                     entry->height,

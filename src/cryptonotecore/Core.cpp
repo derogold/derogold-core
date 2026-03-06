@@ -2347,10 +2347,21 @@ namespace CryptoNote
 
 	auto timestamps = cache->getLastTimestamps(currency.timestampCheckWindow(previousBlockIndex+1), previousBlockIndex, addGenesisBlock);
 	if (timestamps.size() >= currency.timestampCheckWindow(previousBlockIndex+1)) {
-    	    auto median_ts = Common::medianValue(timestamps);
-    	if (block.timestamp < median_ts) {
-      	    return error::BlockValidationError::TIMESTAMP_TOO_FAR_IN_PAST;
-           } 
+            /* Skip the median-timestamp check for the first
+             * BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW blocks after the sync floor.
+             * The window for those blocks includes synthetic pre-anchor entries
+             * whose timestamps are anchored to the bootstrap wall-clock time
+             * (potentially years ahead of the real historical block timestamps),
+             * which would cause all legitimate incoming blocks to be rejected. */
+            const uint32_t syncFloor = getSyncFloorHeight();
+            const bool nearSyncFloor = syncFloor > 0 &&
+                previousBlockIndex < syncFloor + currency.timestampCheckWindow(previousBlockIndex + 1);
+            if (!nearSyncFloor) {
+    	        auto median_ts = Common::medianValue(timestamps);
+    	        if (block.timestamp < median_ts) {
+      	            return error::BlockValidationError::TIMESTAMP_TOO_FAR_IN_PAST;
+                }
+            }
         }
 
         if (block.baseTransaction.inputs.size() != 1)
