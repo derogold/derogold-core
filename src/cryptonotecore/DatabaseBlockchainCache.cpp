@@ -2422,6 +2422,51 @@ namespace CryptoNote
             static_cast<uint32_t>(currency.blockGrantedFullRewardZone());
 
         BlockchainWriteBatch anchorBatch;
+
+        /* Insert DIFFICULTY_BLOCKS_COUNT-1 synthetic CachedBlockInfo entries at
+         * heights [anchorHeight-N .. anchorHeight-1].  Without these, the first
+         * 60 blocks after the anchor are computed with the LWMA startup guess
+         * (10000) because getLastTimestamps() finds fewer than 61 DB entries.
+         * Those wrong per-block difficulties are stored in cumulativeDifficulty and
+         * permanently corrupt the LWMA – the network difficulty (~31 M) never
+         * recovers.  The synthetic entries give LWMA exactly 61 data points
+         * immediately so block anchorHeight+1 gets the correct difficulty. */
+        {
+            const uint32_t N = static_cast<uint32_t>(CryptoNote::parameters::DIFFICULTY_BLOCKS_COUNT) - 1; // 60
+            const uint64_t avgDiffPerBlock = cumulativeDifficulty / anchorHeight;
+            const uint64_t blockTime       = CryptoNote::parameters::DIFFICULTY_TARGET_V3;
+
+            for (uint32_t i = 0; i < N; ++i)
+            {
+                const uint32_t syntheticHeight = anchorHeight - N + i; // anchorHeight-60 .. anchorHeight-1
+
+                CachedBlockInfo synthInfo;
+
+                /* Unique dummy hash: all-zero except last 4 bytes encode the height. */
+                synthInfo.blockHash = Constants::NULL_HASH;
+                synthInfo.blockHash.data[28] = static_cast<uint8_t>((syntheticHeight >> 24) & 0xFF);
+                synthInfo.blockHash.data[29] = static_cast<uint8_t>((syntheticHeight >> 16) & 0xFF);
+                synthInfo.blockHash.data[30] = static_cast<uint8_t>((syntheticHeight >>  8) & 0xFF);
+                synthInfo.blockHash.data[31] = static_cast<uint8_t>((syntheticHeight >>  0) & 0xFF);
+
+                /* Linearly interpolate cumulativeDifficulty backwards from the anchor. */
+                synthInfo.cumulativeDifficulty =
+                    cumulativeDifficulty - static_cast<uint64_t>(anchorHeight - syntheticHeight) * avgDiffPerBlock;
+
+                /* Linearly extrapolate timestamp backwards (one block-time per step). */
+                synthInfo.timestamp = anchorTimestamp - static_cast<uint64_t>(anchorHeight - syntheticHeight) * blockTime;
+
+                synthInfo.alreadyGeneratedCoins        = alreadyGeneratedCoins;
+                synthInfo.alreadyGeneratedTransactions = alreadyGeneratedTransactions;
+                synthInfo.blockSize = static_cast<uint32_t>(currency.blockGrantedFullRewardZone());
+
+                anchorBatch.insertCachedBlock(synthInfo, syntheticHeight, {} /* no txHashes */);
+                /* No raw block stored – these entries exist only for LWMA seeding.
+                 * getBlockByIndex() on a synthetic height will throw std::out_of_range
+                 * (no raw block in DB), which Core::getBlocks() catches gracefully. */
+            }
+        }
+
         anchorBatch.insertCachedBlock(anchorInfo, anchorHeight, {} /* no txHashes */);
         anchorBatch.insertRawBlock(anchorHeight, RawBlock{} /* empty – served by peers */);
 
