@@ -3091,6 +3091,17 @@ namespace CryptoNote
     {
         RawBlock rawBlock = blockchainCache->getBlockByIndex(blockIndex);
 
+        /* Anchor and synthetic blocks injected during --sync-from-height bootstrap
+         * have no raw block data.  Return a minimal default so callers (e.g. the
+         * /info RPC handler) don't crash while the node is still at anchor height. */
+        if (rawBlock.block.empty())
+        {
+            BlockTemplate block;
+            block.majorVersion = getBlockMajorVersionForHeight(blockIndex);
+            block.minorVersion = 0;
+            return block;
+        }
+
         BlockTemplate block;
         if (!fromBinaryArray(block, rawBlock.block))
         {
