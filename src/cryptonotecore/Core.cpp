@@ -3730,15 +3730,24 @@ namespace CryptoNote
                                    / static_cast<double>(blockDetails.baseReward);
         }
 
-        blockDetails.transactions.reserve(blockTemplate.transactionHashes.size() + 1);
-        CachedTransaction cachedBaseTx(std::move(blockTemplate.baseTransaction));
-        blockDetails.transactions.push_back(getTransactionDetails(cachedBaseTx.getTransactionHash(), segment, false));
-
         blockDetails.totalFeeAmount = 0;
-        for (const Crypto::Hash &transactionHash : blockTemplate.transactionHashes)
+
+        /* Anchor and synthetic pre-anchor blocks have no real coinbase indexed in the DB
+           (restoreBlockTemplate returns a minimal BlockTemplate with empty inputs for them).
+           Skip transaction detail lookups for such blocks to avoid DB read errors. */
+        const bool isRealBlock = !blockTemplate.baseTransaction.inputs.empty();
+        if (isRealBlock)
         {
-            blockDetails.transactions.push_back(getTransactionDetails(transactionHash, segment, false));
-            blockDetails.totalFeeAmount += blockDetails.transactions.back().fee;
+            blockDetails.transactions.reserve(blockTemplate.transactionHashes.size() + 1);
+            CachedTransaction cachedBaseTx(std::move(blockTemplate.baseTransaction));
+            blockDetails.transactions.push_back(
+                getTransactionDetails(cachedBaseTx.getTransactionHash(), segment, false));
+
+            for (const Crypto::Hash &transactionHash : blockTemplate.transactionHashes)
+            {
+                blockDetails.transactions.push_back(getTransactionDetails(transactionHash, segment, false));
+                blockDetails.totalFeeAmount += blockDetails.transactions.back().fee;
+            }
         }
 
         return blockDetails;

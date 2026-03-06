@@ -1968,6 +1968,11 @@ namespace CryptoNote
                                                      std::vector<BinaryArray> &foundTransactions,
                                                      std::vector<Crypto::Hash> &missedTransactions) const
     {
+        if (transactions.empty())
+        {
+            return;
+        }
+
         BlockchainReadBatch batch;
         for (auto &hash : transactions)
         {
@@ -1980,10 +1985,22 @@ namespace CryptoNote
             batch.requestRawBlock(tx.second.blockIndex);
         }
 
-        auto blocks = readDatabase(batch);
-
         foundTransactions.reserve(foundTransactions.size() + transactions.size());
         auto &hashesMap = res.getCachedTransactions();
+
+        /* If no transactions were found in the DB (e.g. anchor/synthetic blocks whose
+           coinbase is not indexed), skip the second read to avoid passing an empty batch
+           to readDatabase, which would trigger an internal error. */
+        if (hashesMap.empty())
+        {
+            for (const auto &hash : transactions)
+            {
+                missedTransactions.push_back(hash);
+            }
+            return;
+        }
+
+        auto blocks = readDatabase(batch);
         auto &blocksMap = blocks.getRawBlocks();
         for (const auto &hash : transactions)
         {
