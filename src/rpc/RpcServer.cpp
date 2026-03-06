@@ -1282,8 +1282,10 @@ std::tuple<Error, uint16_t> RpcServer::infoTrtlApi(
         writer.Uint64(m_core->getPoolTransactionCount());
 
         writer.Key("transactionsSize");
-        /* Transaction count without coinbase transactions - one per block, so subtract height */
-        writer.Uint64(m_core->getBlockchainTransactionCount() - height);
+        /* Transaction count without coinbase transactions - one per block, so subtract height.
+         * Use alreadyGeneratedTransactions from the top block rather than
+         * getBlockchainTransactionCount() to avoid underflow on --sync-from-height nodes. */
+        writer.Uint64(blockDetails.alreadyGeneratedTransactions - height);
 
         writer.Key("upgradeHeights");
         writer.StartArray();
@@ -1570,8 +1572,11 @@ std::tuple<Error, uint16_t> RpcServer::info(const httplib::Request &req, httplib
     writer.Uint64(difficulty);
 
     writer.Key("tx_count");
-    /* Transaction count without coinbase transactions - one per block, so subtract height */
-    writer.Uint64(m_core->getBlockchainTransactionCount() - height);
+    /* Transaction count without coinbase transactions - one per block, so subtract height.
+     * Use alreadyGeneratedTransactions from the top block's CachedBlockInfo rather than
+     * getBlockchainTransactionCount(), which only counts transactions indexed since the
+     * node's anchor height and underflows for --sync-from-height nodes. */
+    writer.Uint64(blockDetails.alreadyGeneratedTransactions - height);
 
     writer.Key("tx_pool_size");
     writer.Uint64(m_core->getPoolTransactionCount());
