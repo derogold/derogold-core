@@ -72,7 +72,7 @@ namespace CryptoNote
             UINT64_C(1829293564005886),
             UINT64_C(89906083563503),
             UINT64_C(31263053),
-            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(1702454231),       // timestamp        – fill in from export_bootstrap_state
             UINT64_C(502363727),        // windowCumulDiff  – fill in from export_bootstrap_state
         },
     };
