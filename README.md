@@ -365,49 +365,11 @@ Available tags: `latest`, `v1.0.1.0`, etc.
 
 ### Building your own image
 
-If you prefer to build the image yourself from source:
+If you prefer to build the image yourself from source, a `Dockerfile` is included in the repository.
 
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) installed and running
-
-### Dockerfile
-
-Create a file named `Dockerfile` in the root of the repository with the following content:
-
-```dockerfile
-FROM ubuntu:22.04 AS builder
-
-RUN apt-get update && apt-get install -y \
-    git cmake ninja-build build-essential \
-    gcc-9 g++-9 curl zip unzip tar pkg-config \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9 \
-    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9 \
-    && update-alternatives --set gcc /usr/bin/gcc-9 \
-    && update-alternatives --set g++ /usr/bin/g++-9 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-COPY . .
-
-RUN CC=gcc CXX=g++ cmake \
-    -D VCPKG_TARGET_TRIPLET=x64-linux-release \
-    -G Ninja -S . -B build \
-    && cmake --build build --target DeroGoldd
-
-FROM ubuntu:22.04
-
-RUN apt-get update && apt-get install -y libstdc++6 ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /src/build/src/DeroGoldd /usr/local/bin/DeroGoldd
-
-VOLUME /data
-
-EXPOSE 42069 6969
-
-ENTRYPOINT ["DeroGoldd", "--data-dir=/data"]
-```
 
 ### Build the image
 

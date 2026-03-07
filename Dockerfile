@@ -73,7 +73,7 @@ RUN --mount=type=bind,target=/usr/local/src/DeroGold,rw \
 # Default runtime environment
 ##################################################
 FROM ubuntu:${UBUNTU_VERSION} AS release_default
-LABEL org.opencontainers.image.source="https://github.com/jianmingyong/derogold"
+LABEL org.opencontainers.image.source="https://github.com/derogold/derogold-core"
 LABEL org.opencontainers.image.description="DeroGold is a digital assets project focused on preserving our life environment here on Earth."
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
