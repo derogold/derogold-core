@@ -249,7 +249,9 @@ namespace CryptoNote
                                          uint64_t alreadyGeneratedCoins,
                                          uint64_t cumulativeDifficulty,
                                          uint64_t alreadyGeneratedTransactions,
-                                         uint64_t windowCumulDiff) override;
+                                         uint64_t windowCumulDiff,
+                                         uint64_t anchorPrevBlockDiff,
+                                         const uint64_t *lwmaTimestamps) override;
 
         virtual void pruneRawBlocksBefore(uint32_t height) override;
 

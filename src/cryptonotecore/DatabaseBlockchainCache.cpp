@@ -2423,7 +2423,9 @@ namespace CryptoNote
         uint64_t alreadyGeneratedCoins,
         uint64_t cumulativeDifficulty,
         uint64_t alreadyGeneratedTransactions,
-        uint64_t windowCumulDiff)
+        uint64_t windowCumulDiff,
+        uint64_t anchorPrevBlockDiff,
+        const uint64_t *lwmaTimestamps)
     {
         logger(Logging::INFO)
             << "injectBootstrapAnchor: injecting sync anchor at height " << anchorHeight
@@ -2451,19 +2453,37 @@ namespace CryptoNote
          * immediately so block anchorHeight+1 gets the correct difficulty. */
         {
             const uint32_t N = static_cast<uint32_t>(CryptoNote::parameters::DIFFICULTY_BLOCKS_COUNT) - 1; // 60
-            /* Use the actual last-N-blocks window cumDiff when available (populated by
-             * export_bootstrap_state).  This gives LWMA the same input as the real network
-             * and avoids a systematic difficulty inflation caused by using the all-time
-             * historical average (anchorCumulDiff / anchorHeight) which is typically
-             * higher than the actual per-block difficulty at the anchor height. */
-            const uint64_t avgDiffPerBlock = (windowCumulDiff > 0)
-                ? windowCumulDiff / N
-                : cumulativeDifficulty / anchorHeight;
-            const uint64_t blockTime       = CryptoNote::parameters::DIFFICULTY_TARGET_V3;
+
+            /* Determine per-block cumDiff spacing.
+             *
+             * When anchorPrevBlockDiff > 0, use it as the last synthetic block's
+             * contribution (= D[anchorHeight] = cumDiff[anchor] - cumDiff[anchor-1]).
+             * The remaining N-1 blocks split the leftover evenly.  This gives the
+             * LWMA's prev_D the exact real-network value, which controls clamping.
+             *
+             * Fall back to uniform windowCumulDiff/N spacing when anchorPrevBlockDiff
+             * is not provided. */
+            const uint64_t lastSynthDiff = (anchorPrevBlockDiff > 0)
+                ? anchorPrevBlockDiff
+                : ((windowCumulDiff > 0) ? windowCumulDiff / N : cumulativeDifficulty / anchorHeight);
+            const uint64_t otherAvgDiff  = (anchorPrevBlockDiff > 0 && N > 1)
+                ? (windowCumulDiff - anchorPrevBlockDiff) / (N - 1)
+                : lastSynthDiff;
+
+            /* Determine per-block timestamp spacing.
+             *
+             * lwmaTimestamps[0..60] are the exact on-chain timestamps for heights
+             * [anchorHeight-60 .. anchorHeight].  When provided they are stored
+             * directly so that L = sum(ST[i]*i) in the LWMA formula exactly matches
+             * the real network's value.  Without them we fall back to uniform
+             * DIFFICULTY_TARGET_V3 spacing from the anchor timestamp. */
+            const bool haveExactTs = (lwmaTimestamps != nullptr) && (lwmaTimestamps[0] != 0);
+            const uint64_t blockTime = CryptoNote::parameters::DIFFICULTY_TARGET_V3;
 
             for (uint32_t i = 0; i < N; ++i)
             {
                 const uint32_t syntheticHeight = anchorHeight - N + i; // anchorHeight-60 .. anchorHeight-1
+                const uint32_t stepsFromAnchor = anchorHeight - syntheticHeight; // N..1
 
                 CachedBlockInfo synthInfo;
 
@@ -2474,12 +2494,31 @@ namespace CryptoNote
                 synthInfo.blockHash.data[30] = static_cast<uint8_t>((syntheticHeight >>  8) & 0xFF);
                 synthInfo.blockHash.data[31] = static_cast<uint8_t>((syntheticHeight >>  0) & 0xFF);
 
-                /* Linearly interpolate cumulativeDifficulty backwards from the anchor. */
-                synthInfo.cumulativeDifficulty =
-                    cumulativeDifficulty - static_cast<uint64_t>(anchorHeight - syntheticHeight) * avgDiffPerBlock;
+                /* Interpolate cumulativeDifficulty backwards from the anchor.
+                 * The block immediately before the anchor uses anchorPrevBlockDiff;
+                 * all earlier blocks use otherAvgDiff. */
+                if (stepsFromAnchor == 1)
+                {
+                    synthInfo.cumulativeDifficulty = cumulativeDifficulty - lastSynthDiff;
+                }
+                else
+                {
+                    synthInfo.cumulativeDifficulty =
+                        cumulativeDifficulty - lastSynthDiff
+                        - static_cast<uint64_t>(stepsFromAnchor - 1) * otherAvgDiff;
+                }
 
-                /* Linearly extrapolate timestamp backwards (one block-time per step). */
-                synthInfo.timestamp = anchorTimestamp - static_cast<uint64_t>(anchorHeight - syntheticHeight) * blockTime;
+                /* Timestamp: exact from checkpoint data when available, otherwise
+                 * linear extrapolation from anchor at one block-time per step. */
+                if (haveExactTs)
+                {
+                    // lwmaTimestamps index 0 = anchorHeight-60, index 60 = anchorHeight
+                    synthInfo.timestamp = lwmaTimestamps[i];
+                }
+                else
+                {
+                    synthInfo.timestamp = anchorTimestamp - static_cast<uint64_t>(stepsFromAnchor) * blockTime;
+                }
 
                 synthInfo.alreadyGeneratedCoins        = alreadyGeneratedCoins;
                 synthInfo.alreadyGeneratedTransactions = alreadyGeneratedTransactions;

@@ -50,10 +50,14 @@ namespace CryptoNote
         uint64_t    alreadyGeneratedCoins;
         uint64_t    cumulativeDifficulty;
         uint64_t    alreadyGeneratedTransactions;
-        uint64_t    timestamp;       // 0 = unknown, falls back to wall-clock
-        uint64_t    windowCumulDiff; // cumulDiff[height] - cumulDiff[height-60]
-                                     // 0 = unknown, falls back to historical average
-                                     // Get with: export_bootstrap_state <height>
+        uint64_t    timestamp;            // real block timestamp; 0 = fall back to wall-clock
+        uint64_t    windowCumulDiff;      // cumulDiff[height] - cumulDiff[height-60]
+        uint64_t    anchorPrevBlockDiff;  // cumulDiff[height] - cumulDiff[height-1]
+                                          // = exact prev_D for LWMA; 0 = use windowCumulDiff/60
+        // Exact timestamps for heights [height-60 .. height] (index 0 = height-60, 60 = height).
+        // Used to seed synthetic pre-anchor blocks with historically correct solve-times so that
+        // L = sum(ST[i]*i) matches the real network's value.  All zeros = use 300-second fallback.
+        uint64_t    lwmaTimestamps[61];
     };
 
     /**
@@ -72,8 +76,10 @@ namespace CryptoNote
             UINT64_C(1829293564005886),
             UINT64_C(89906083563503),
             UINT64_C(31263053),
-            UINT64_C(1702454231),       // timestamp        – fill in from export_bootstrap_state
-            UINT64_C(502363727),        // windowCumulDiff  – fill in from export_bootstrap_state
+            UINT64_C(1702454231),       // timestamp
+            UINT64_C(502363727),        // windowCumulDiff
+            UINT64_C(0),                // anchorPrevBlockDiff – fill in from export_bootstrap_state
+            {},                         // lwmaTimestamps[61]  – fill in from export_bootstrap_state
         },
     };
 

@@ -227,7 +227,9 @@ namespace CryptoNote
             uint64_t alreadyGeneratedCoins,
             uint64_t cumulativeDifficulty,
             uint64_t alreadyGeneratedTransactions,
-            uint64_t windowCumulDiff);
+            uint64_t windowCumulDiff,
+            uint64_t anchorPrevBlockDiff,
+            const uint64_t *lwmaTimestamps);  // 61-element array or nullptr
 
         virtual std::vector<BinaryArray> getRawTransactions(
             const std::vector<Crypto::Hash> &transactions,

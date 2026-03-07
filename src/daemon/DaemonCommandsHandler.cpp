@@ -1001,6 +1001,8 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
     uint64_t alreadyGeneratedTransactions = 0;
     uint64_t blockTimestamp               = 0;
     uint64_t windowCumulDiff              = 0;
+    uint64_t anchorPrevBlockDiff          = 0;
+    std::vector<uint64_t> lwmaTimestamps; // [targetHeight-60 .. targetHeight]
 
     /* getBlockDetails reads the raw block blob; it throws std::out_of_range when
      * the block has been pruned.  In that case we skip coins/tx/timestamp (they
@@ -1034,9 +1036,23 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
             windowCumulDiff = cumulativeDifficulty
                               - m_core.getCumulativeDifficulty(targetHeight - windowSize);
         }
+        if (targetHeight >= 1)
+        {
+            anchorPrevBlockDiff = cumulativeDifficulty
+                                  - m_core.getCumulativeDifficulty(targetHeight - 1);
+        }
         /* CachedBlockInfo is never pruned – always fetch timestamp from here,
          * overriding any 0 that was left by a pruned getBlockDetails path above. */
         blockTimestamp = m_core.getBlockTimestampByIndex(targetHeight);
+
+        /* Collect the 61 exact LWMA timestamps: heights [targetHeight-60 .. targetHeight] */
+        const uint32_t lwmaWindow = static_cast<uint32_t>(CryptoNote::parameters::DIFFICULTY_WINDOW);
+        const uint32_t tsStart = (targetHeight >= lwmaWindow) ? (targetHeight - lwmaWindow) : 0;
+        lwmaTimestamps.reserve(lwmaWindow + 1);
+        for (uint32_t h = tsStart; h <= targetHeight; ++h)
+        {
+            lwmaTimestamps.push_back(m_core.getBlockTimestampByIndex(h));
+        }
     }
     catch (const std::exception &e)
     {
@@ -1058,6 +1074,19 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
               << "            UINT64_C(" << alreadyGeneratedTransactions << "), // alreadyGeneratedTransactions" << std::endl
               << "            UINT64_C(" << blockTimestamp << "), // timestamp" << std::endl
               << "            UINT64_C(" << windowCumulDiff << "), // windowCumulDiff" << std::endl
+              << "            UINT64_C(" << anchorPrevBlockDiff << "), // anchorPrevBlockDiff" << std::endl;
+
+    /* Print the lwmaTimestamps array */
+    std::cout << "            {";
+    for (size_t i = 0; i < lwmaTimestamps.size(); ++i)
+    {
+        if (i % 6 == 0)
+            std::cout << std::endl << "                ";
+        std::cout << "UINT64_C(" << lwmaTimestamps[i] << ")";
+        if (i + 1 < lwmaTimestamps.size())
+            std::cout << ", ";
+    }
+    std::cout << std::endl << "            }, // lwmaTimestamps[height-60..height]" << std::endl
               << "        }," << std::endl << std::endl;
 
     std::cout << InformationMsg("Also verify height ") << targetHeight

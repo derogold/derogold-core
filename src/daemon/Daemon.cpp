@@ -432,6 +432,10 @@ int main(int argc, char *argv[])
                     ? entry->timestamp
                     : static_cast<uint64_t>(std::time(nullptr));
 
+                const uint64_t *lwmaTs = (entry->lwmaTimestamps[0] != 0)
+                    ? entry->lwmaTimestamps
+                    : nullptr;
+
                 ccore->bootstrapFromHeight(
                     entry->height,
                     anchorHash,
@@ -439,7 +443,9 @@ int main(int argc, char *argv[])
                     entry->alreadyGeneratedCoins,
                     entry->cumulativeDifficulty,
                     entry->alreadyGeneratedTransactions,
-                    entry->windowCumulDiff);
+                    entry->windowCumulDiff,
+                    entry->anchorPrevBlockDiff,
+                    lwmaTs);
 
                 logger(INFO)
                     << "Bootstrap complete. Node will sync from height "
