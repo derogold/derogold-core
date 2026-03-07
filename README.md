@@ -424,6 +424,6 @@ Read the [LICENSE](https://github.com/derogold/derogold-core/blob/master/LICENSE
 
 ## Thanks
 
-Cryptonote Developers, Bytecoin Developers, Monero Developers, Forknote Project, TurtleCoin Developers
+Cryptonote Developers, Bytecoin Developers, Monero Developers, Forknote Project, TurtleCoin Developers, WRKZCoin Developers
 
 <p align="right">(<a href="#top">back to top</a>)</p>
