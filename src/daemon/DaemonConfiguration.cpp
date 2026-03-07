@@ -145,7 +145,7 @@ namespace DaemonConfig
             ("db-enable-compression", "Enable database compression", cxxopts::value<bool>(config.enableDbCompression)->default_value(config.enableDbCompression ? "true" : "false"))
             ("db-max-open-files", "Number of files that can be used by the database at one time " + maxOpenFiles, cxxopts::value<int>())
             ("db-read-buffer-size", "Size of the database read cache in megabytes (MB) " + readCache, cxxopts::value<int>())
-            ("db-threads", "Number of background threads used for compaction and flush operations (RocksDB only)", cxxopts::value<int>(config.dbThreads))
+            ("db-threads", "Number of background threads used for compaction and flush operations (RocksDB only) (default: number of CPU cores, currently " + std::to_string(config.dbThreads) + ")", cxxopts::value<int>(config.dbThreads))
             ("db-write-buffer-size", "Size of the database write buffer in megabytes (MB) " + writeBuffer, cxxopts::value<int>())
             ("db-optimize", "Optimize database and close", cxxopts::value<bool>(config.dbOptimize));
 
