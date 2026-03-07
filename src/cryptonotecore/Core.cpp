@@ -2161,10 +2161,14 @@ namespace CryptoNote
 
     CoreStatistics Core::getCoreStatistics() const
     {
-        // TODO: implement it
-        assert(false);
+        throwIfNotInitialized();
+
         CoreStatistics result;
-        std::fill(reinterpret_cast<uint8_t *>(&result), reinterpret_cast<uint8_t *>(&result) + sizeof(result), 0);
+        result.transactionPoolSize   = transactionPool->getTransactionHashes().size();
+        result.blockchainHeight      = getTopBlockIndex();
+        result.miningSpeed           = 0;
+        result.alternativeBlockCount = getAlternativeBlockCount();
+        result.topBlockHashString    = Common::podToHex(getTopBlockHash());
         return result;
     }
 
@@ -2840,7 +2844,6 @@ namespace CryptoNote
             } catch (const std::exception &e)
             {
                 break;
-                return err;
             }
 
             if (err != "" && err != "Empty blockIndexStr or rawBlockLenStr")

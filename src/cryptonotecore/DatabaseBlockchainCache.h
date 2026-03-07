@@ -326,9 +326,6 @@ namespace CryptoNote
             uint16_t transactionBlockIndex,
             BlockchainWriteBatch &batch);
 
-        uint32_t insertKeyOutputToGlobalIndex(
-            uint64_t amount,
-            PackedOutIndex output); // TODO not implemented. Should it be removed?
         uint32_t updateKeyOutputCount(Amount amount, int32_t diff) const;
 
         void insertPaymentId(
