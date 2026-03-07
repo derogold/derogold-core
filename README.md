@@ -394,13 +394,7 @@ On first launch with an empty database, the node injects a trusted anchor block 
 
 | Height    | Approx. date  |
 |-----------|---------------|
-| 1,000,000 | 2021          |
-| 1,500,000 | 2022          |
-| 2,000,000 | 2022          |
-| 2,500,000 | 2023          |
-| 2,700,000 | 2024 *(recommended)* |
-
-The highest available floor (2,700,000) gives the fastest sync. Lower floors retain more history.
+| 2,700,000 | 2024          |
 
 ### Usage
 
@@ -408,7 +402,7 @@ The highest available floor (2,700,000) gives the fastest sync. Lower floors ret
 ./DeroGoldd --sync-from-height=2700000
 ```
 
-The argument must match one of the supported heights listed above. If the database already contains blocks the flag is silently ignored — use `--resync` first if you need a clean start.
+The argument must match a supported height listed above. If the database already contains blocks the flag is silently ignored — use `--resync` first if you need a clean start.
 
 ### Exporting a new bootstrap state (for node operators)
 
