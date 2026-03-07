@@ -79,6 +79,12 @@ jobs:
             }
           }
 
+      - name: Install CMake
+        uses: lukka/get-cmake@v3.31.6
+
+      - name: Setup ccache
+        uses: jianmingyong/ccache-action@v1
+
       - name: Pin GCC 9 (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -96,12 +102,6 @@ jobs:
             sudo update-alternatives --set aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9
             sudo update-alternatives --set aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9
           }
-
-      - name: Install CMake
-        uses: lukka/get-cmake@v3.31.6
-
-      - name: Setup ccache
-        uses: jianmingyong/ccache-action@v1
         with:
           ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
           max-size: 150M
