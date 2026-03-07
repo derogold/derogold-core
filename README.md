@@ -9,7 +9,6 @@
   <li><a href="#development-resources">Development Resources</a></li>
   <li><a href="#introduction">Introduction</a></li>
   <li><a href="#installing">Installing</a></li>
-  <li><a href="#docker-images">Docker Images</a></li>
   <li><a href="#build-instructions">Build Instructions</a></li>
   <ol>
     <li><a href="#windows-x64-only">Windows (x64 only)</a></li>
@@ -37,7 +36,7 @@
 ## Development Resources
 
 * Web: https://derogold.com/
-* GitHub: https://github.com/jianmingyong/derogold
+* GitHub: https://github.com/derogold/derogold-core
 * Discord: https://discordapp.com/invite/j2aSNFn
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -56,22 +55,12 @@ However, we are much more than that. We run our own privacy digital asset that a
 
 ## Installing
 
-We offer binary images of the latest releases here: https://github.com/jianmingyong/derogold/releases
+We offer binary images of the latest releases here: https://github.com/derogold/derogold-core/releases
 
 If you would like to compile yourself, read on.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-## Docker Images
-
-We offer docker images of the latest releases here: https://hub.docker.com/r/jianmingyong/derogold/tags
-
-By default, the images use Ubuntu 20.04 LTS as a base image when build.
-
-Supported tags:
-- latest, 0.7.2.3
-
-<p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Build Instructions
 
@@ -111,7 +100,7 @@ Building:
 - From the start menu, open 'x64 Native Tools Command Prompt for VS 2022'
 - If you need to change the default drive C: to D: for example, just type `D:` and hit enter
 - Use `cd` to change to your desired directory to store DeroGold code
-- `git clone -b development --recursive https://github.com/derogold/derogold.git`
+- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
 - `cd derogold`
 - `cmake --preset windows-x64-msvc-install`
 - `cmake --build --preset windows-x64-msvc-install`
@@ -133,7 +122,7 @@ Prerequisites:
   - Run `pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-ccache git`
 
 Building:
-- `git clone -b development --recursive https://github.com/derogold/derogold.git`
+- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
 - `cd derogold`
 - `cmake --preset windows-x64-mingw-gcc-install`
 - `cmake --build --preset windows-x64-mingw-gcc-install`
@@ -155,7 +144,7 @@ Prerequisites:
   - Run `pacman -S mingw-w64-clang-x86_64-toolchain mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-ccache git`
 
 Building:
-- `git clone -b development --recursive https://github.com/derogold/derogold.git`
+- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
 - `cd derogold`
 - `cmake --preset windows-x64-mingw-clang-install`
 - `cmake --build --preset windows-x64-mingw-clang-install`
@@ -172,8 +161,17 @@ Alternatively:
 
 #### GCC
 
+> **⚠️ Compiler requirement:** DeroGold must be built with **GCC/G++ version 9**. Newer compiler versions are not yet supported due to cryptography compatibility issues. Install with:
+> ```bash
+> sudo apt-get install gcc-9 g++-9
+> sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9
+> sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9
+> sudo update-alternatives --set gcc /usr/bin/gcc-9
+> sudo update-alternatives --set g++ /usr/bin/g++-9
+> ```
+
 Prerequisites:
-- For Ubuntu: `sudo apt-get install git cmake ninja-build build-essential curl zip unzip tar pkg-config`
+- For Ubuntu: `sudo apt-get install git cmake ninja-build build-essential gcc-9 g++-9 curl zip unzip tar pkg-config`
 - (Optional) `sudo apt-get install crossbuild-essential-arm64` for cross building aarch64 target
 
 **NOTE: Ubuntu 20.04 LTS provides an outdated version of CMake hence it does not support presets.**
@@ -183,7 +181,7 @@ Building via CLI:
 #########################
 # For native x64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=x64-linux-release -G Ninja -S . -B build
 cmake --build build
@@ -192,7 +190,7 @@ sudo cmake --install build
 #########################
 # For native arm64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=arm64-linux-release -G Ninja -S . -B build
 cmake --build build
@@ -204,7 +202,7 @@ Building via Presets:
 #########################
 # For native x64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 
 # For build only.
@@ -218,7 +216,7 @@ sudo cmake --build --preset linux-x64-gcc-install
 #########################
 # For native arm64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 
 # For build only.
@@ -250,7 +248,7 @@ Building via CLI:
 #########################
 # For native x64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 CC=clang CXX=clang++ cmake -D VCPKG_TARGET_TRIPLET=x64-linux-release-clang -D CMAKE_BUILD_TYPE=Release -D ARCH=native -G Ninja -S . -B build
 cmake --build build
@@ -259,7 +257,7 @@ sudo cmake --install build
 #########################
 # For native arm64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=arm64-linux-release-clang -D CMAKE_BUILD_TYPE=Release -D ARCH=native -G Ninja -S . -B build
 cmake --build build
@@ -271,7 +269,7 @@ Building via Presets:
 #########################
 # For native x64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 
 # For build only.
@@ -285,7 +283,7 @@ sudo cmake --build --preset linux-x64-clang-install
 #########################
 # For native arm64 builds
 #########################
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 
 # For build only.
@@ -316,7 +314,7 @@ Prerequisites:
 
 Building via CLI:
 ```bash
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 CC=clang CXX=clang++ LDFLAGS="-L/usr/local/opt/llvm/lib/c++ -L/usr/local/opt/llvm/lib -lunwind" CPPFLAGS="-I/usr/local/opt/llvm/include" cmake -D VCPKG_TARGET_TRIPLET=x64-osx-release -G Ninja -S . -B build
 cmake --build build
@@ -325,7 +323,7 @@ sudo cmake --install build
 
 Building via Presets:
 ```bash
-git clone -b development --recursive https://github.com/derogold/derogold.git
+git clone -b development --recursive https://github.com/derogold/derogold-core.git
 cd derogold
 
 # For build only.
@@ -426,7 +424,7 @@ The height must already exist in `CryptoNoteCheckpoints.h`. Copy the printed val
 
 ## License
 
-Read the [LICENSE](https://github.com/derogold/derogold/blob/master/LICENSE) file for more details.
+Read the [LICENSE](https://github.com/derogold/derogold-core/blob/master/LICENSE) file for more details.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
