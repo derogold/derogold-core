@@ -340,7 +340,32 @@ sudo cmake --build --preset osx-x64-clang-install
 
 ## Docker
 
-This section covers how to build a Docker image of DeroGoldd and run it as a container in your own environment.
+### Using the pre-built image
+
+Pre-built images are published to the GitHub Container Registry on every release:
+
+```bash
+docker pull ghcr.io/derogold/derogold-core:latest
+```
+
+Run it straight away:
+
+```bash
+docker run -d \
+    --name derogoldd \
+    -p 42069:42069 \
+    -p 6969:6969 \
+    -v derogold-data:/data \
+    ghcr.io/derogold/derogold-core:latest
+```
+
+Available tags: `latest`, `v1.0.1.0`, etc.
+
+---
+
+### Building your own image
+
+If you prefer to build the image yourself from source:
 
 ### Prerequisites
 
