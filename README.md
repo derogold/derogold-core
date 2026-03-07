@@ -27,6 +27,7 @@
       <li><a href="#clang-1">CLANG</a></li>
     </ol>
   </ol>
+  <li><a href="#docker">Docker</a></li>
   <li><a href="#pruned-node-mode">Pruned Node Mode</a></li>
   <li><a href="#fast-sync---sync-from-height">Fast Sync (--sync-from-height)</a></li>
   <li><a href="#license">License</a></li>
@@ -334,6 +335,110 @@ cmake --build --preset osx-x64-clang-all
 cmake --preset osx-x64-clang-install
 sudo cmake --build --preset osx-x64-clang-install
 ```
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## Docker
+
+This section covers how to build a Docker image of DeroGoldd and run it as a container in your own environment.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed and running
+
+### Dockerfile
+
+Create a file named `Dockerfile` in the root of the repository with the following content:
+
+```dockerfile
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y \
+    git cmake ninja-build build-essential \
+    gcc-9 g++-9 curl zip unzip tar pkg-config \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9 \
+    && update-alternatives --set gcc /usr/bin/gcc-9 \
+    && update-alternatives --set g++ /usr/bin/g++-9 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+RUN CC=gcc CXX=g++ cmake \
+    -D VCPKG_TARGET_TRIPLET=x64-linux-release \
+    -G Ninja -S . -B build \
+    && cmake --build build --target DeroGoldd
+
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y libstdc++6 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/build/src/DeroGoldd /usr/local/bin/DeroGoldd
+
+VOLUME /data
+
+EXPOSE 42069 6969
+
+ENTRYPOINT ["DeroGoldd", "--data-dir=/data"]
+```
+
+### Build the image
+
+```bash
+docker build -t derogoldd:latest .
+```
+
+### Run the container
+
+**Standard node:**
+```bash
+docker run -d \
+    --name derogoldd \
+    -p 42069:42069 \
+    -p 6969:6969 \
+    -v derogold-data:/data \
+    derogoldd:latest
+```
+
+**Fast sync from height 2,700,000:**
+```bash
+docker run -d \
+    --name derogoldd \
+    -p 42069:42069 \
+    -p 6969:6969 \
+    -v derogold-data:/data \
+    derogoldd:latest --sync-from-height=2700000
+```
+
+**Pruned node:**
+```bash
+docker run -d \
+    --name derogoldd \
+    -p 42069:42069 \
+    -p 6969:6969 \
+    -v derogold-data:/data \
+    derogoldd:latest --prune
+```
+
+### Useful commands
+
+```bash
+# View logs
+docker logs -f derogoldd
+
+# Access the daemon console
+docker exec -it derogoldd DeroGoldd --help
+
+# Stop the node
+docker stop derogoldd
+
+# Remove the container (data volume is preserved)
+docker rm derogoldd
+```
+
+> **Note:** The blockchain data is stored in the `derogold-data` Docker volume and persists across container restarts and removals. To start fresh, remove the volume with `docker volume rm derogold-data`.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
