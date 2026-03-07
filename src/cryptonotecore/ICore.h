@@ -239,7 +239,8 @@ namespace CryptoNote
                                          uint64_t anchorTimestamp,
                                          uint64_t alreadyGeneratedCoins,
                                          uint64_t cumulativeDifficulty,
-                                         uint64_t alreadyGeneratedTransactions) = 0;
+                                         uint64_t alreadyGeneratedTransactions,
+                                         uint64_t windowCumulDiff) = 0;
 
         /* Deletes raw block blobs for all indices below @p height on the main chain.
          * All indexed data is preserved.  Safe to call from a background thread. */

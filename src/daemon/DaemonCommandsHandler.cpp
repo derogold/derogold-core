@@ -996,24 +996,48 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
     /* Fetch the block hash at targetHeight. */
     const Crypto::Hash blockHash = m_core.getBlockHashByIndex(targetHeight);
 
-    /* Walk from genesis to targetHeight to accumulate coin & tx counts.
-     * For a fully-synced node this is read from DB metadata per-block. */
     uint64_t alreadyGeneratedCoins        = 0;
     uint64_t cumulativeDifficulty         = 0;
     uint64_t alreadyGeneratedTransactions = 0;
+    uint64_t blockTimestamp               = 0;
+    uint64_t windowCumulDiff              = 0;
 
-    uint64_t blockTimestamp = 0;
+    /* getBlockDetails reads the raw block blob; it throws std::out_of_range when
+     * the block has been pruned.  In that case we skip coins/tx/timestamp (they
+     * will be 0 in the output) but continue to compute difficulty values from
+     * the always-available CachedBlockInfo index. */
     try
     {
         CryptoNote::BlockDetails details = m_core.getBlockDetails(blockHash);
         alreadyGeneratedCoins        = details.alreadyGeneratedCoins;
         alreadyGeneratedTransactions = details.alreadyGeneratedTransactions;
-        cumulativeDifficulty         = m_core.getCumulativeDifficulty(targetHeight);
         blockTimestamp               = details.timestamp;
+    }
+    catch (const std::out_of_range &)
+    {
+        std::cout << InformationMsg("Note: raw block at height ") << targetHeight
+                  << InformationMsg(" is pruned; coins/txs/timestamp will be 0.") << std::endl;
     }
     catch (const std::exception &e)
     {
         std::cout << WarningMsg("Could not fetch block details: ") << e.what() << std::endl;
+        return false;
+    }
+
+    try
+    {
+        cumulativeDifficulty = m_core.getCumulativeDifficulty(targetHeight);
+        const uint32_t windowSize =
+            static_cast<uint32_t>(CryptoNote::parameters::DIFFICULTY_WINDOW);
+        if (targetHeight >= windowSize)
+        {
+            windowCumulDiff = cumulativeDifficulty
+                              - m_core.getCumulativeDifficulty(targetHeight - windowSize);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << WarningMsg("Could not fetch difficulty data: ") << e.what() << std::endl;
         return false;
     }
 
@@ -1030,6 +1054,7 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
               << "            UINT64_C(" << cumulativeDifficulty << "), // cumulativeDifficulty" << std::endl
               << "            UINT64_C(" << alreadyGeneratedTransactions << "), // alreadyGeneratedTransactions" << std::endl
               << "            UINT64_C(" << blockTimestamp << "), // timestamp" << std::endl
+              << "            UINT64_C(" << windowCumulDiff << "), // windowCumulDiff" << std::endl
               << "        }," << std::endl << std::endl;
 
     std::cout << InformationMsg("Also verify height ") << targetHeight

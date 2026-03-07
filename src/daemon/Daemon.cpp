@@ -438,7 +438,8 @@ int main(int argc, char *argv[])
                     anchorTimestamp,
                     entry->alreadyGeneratedCoins,
                     entry->cumulativeDifficulty,
-                    entry->alreadyGeneratedTransactions);
+                    entry->alreadyGeneratedTransactions,
+                    entry->windowCumulDiff);
 
                 logger(INFO)
                     << "Bootstrap complete. Node will sync from height "

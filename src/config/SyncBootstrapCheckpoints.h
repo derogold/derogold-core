@@ -50,7 +50,10 @@ namespace CryptoNote
         uint64_t    alreadyGeneratedCoins;
         uint64_t    cumulativeDifficulty;
         uint64_t    alreadyGeneratedTransactions;
-        uint64_t    timestamp; // 0 = unknown, falls back to wall-clock
+        uint64_t    timestamp;       // 0 = unknown, falls back to wall-clock
+        uint64_t    windowCumulDiff; // cumulDiff[height] - cumulDiff[height-60]
+                                     // 0 = unknown, falls back to historical average
+                                     // Get with: export_bootstrap_state <height>
     };
 
     /**
@@ -69,7 +72,8 @@ namespace CryptoNote
             UINT64_C(963502374716270),   // alreadyGeneratedCoins  – replace
             UINT64_C(26545226639472),   // cumulativeDifficulty   – replace
             UINT64_C(3071175),          // alreadyGeneratedTransactions – replace
-            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
+            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(0),                // windowCumulDiff  – fill in from export_bootstrap_state
         },
         /* height 1 500 000 – fill in with: export_bootstrap_state 1500000 */
         {
@@ -78,7 +82,8 @@ namespace CryptoNote
             UINT64_C(1228253003805553),
             UINT64_C(28983155871648),
             UINT64_C(18652499),
-            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
+            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(0),                // windowCumulDiff  – fill in from export_bootstrap_state
         },
         /* height 2 000 000 – fill in with: export_bootstrap_state 2000000 */
         {
@@ -87,7 +92,8 @@ namespace CryptoNote
             UINT64_C(1484020623125170),
             UINT64_C(30581354740331),
             UINT64_C(24699942),
-            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
+            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(0),                // windowCumulDiff  – fill in from export_bootstrap_state
         },
         /* height 2 500 000 – fill in with: export_bootstrap_state 2500000 */
         {
@@ -96,7 +102,8 @@ namespace CryptoNote
             UINT64_C(1731799467373277),
             UINT64_C(71990059621657),
             UINT64_C(30406065),
-            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
+            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(0),                // windowCumulDiff  – fill in from export_bootstrap_state
         },
         /* height 2 700 000 – fill in with: export_bootstrap_state 2700000 */
         {
@@ -105,7 +112,8 @@ namespace CryptoNote
             UINT64_C(1829293564005886),
             UINT64_C(89906083563503),
             UINT64_C(31263053),
-            UINT64_C(0),                // timestamp – fill in from export_bootstrap_state
+            UINT64_C(0),                // timestamp        – fill in from export_bootstrap_state
+            UINT64_C(0),                // windowCumulDiff  – fill in from export_bootstrap_state
         },
     };
 

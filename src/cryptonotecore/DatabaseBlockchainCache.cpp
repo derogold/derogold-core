@@ -2422,7 +2422,8 @@ namespace CryptoNote
         uint64_t anchorTimestamp,
         uint64_t alreadyGeneratedCoins,
         uint64_t cumulativeDifficulty,
-        uint64_t alreadyGeneratedTransactions)
+        uint64_t alreadyGeneratedTransactions,
+        uint64_t windowCumulDiff)
     {
         logger(Logging::INFO)
             << "injectBootstrapAnchor: injecting sync anchor at height " << anchorHeight
@@ -2450,7 +2451,14 @@ namespace CryptoNote
          * immediately so block anchorHeight+1 gets the correct difficulty. */
         {
             const uint32_t N = static_cast<uint32_t>(CryptoNote::parameters::DIFFICULTY_BLOCKS_COUNT) - 1; // 60
-            const uint64_t avgDiffPerBlock = cumulativeDifficulty / anchorHeight;
+            /* Use the actual last-N-blocks window cumDiff when available (populated by
+             * export_bootstrap_state).  This gives LWMA the same input as the real network
+             * and avoids a systematic difficulty inflation caused by using the all-time
+             * historical average (anchorCumulDiff / anchorHeight) which is typically
+             * higher than the actual per-block difficulty at the anchor height. */
+            const uint64_t avgDiffPerBlock = (windowCumulDiff > 0)
+                ? windowCumulDiff / N
+                : cumulativeDifficulty / anchorHeight;
             const uint64_t blockTime       = CryptoNote::parameters::DIFFICULTY_TARGET_V3;
 
             for (uint32_t i = 0; i < N; ++i)

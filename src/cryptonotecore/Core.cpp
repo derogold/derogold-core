@@ -2938,7 +2938,8 @@ namespace CryptoNote
         uint64_t anchorTimestamp,
         uint64_t alreadyGeneratedCoins,
         uint64_t cumulativeDifficulty,
-        uint64_t alreadyGeneratedTransactions)
+        uint64_t alreadyGeneratedTransactions,
+        uint64_t windowCumulDiff)
     {
         throwIfNotInitialized();
 
@@ -2964,7 +2965,8 @@ namespace CryptoNote
             anchorTimestamp,
             alreadyGeneratedCoins,
             cumulativeDifficulty,
-            alreadyGeneratedTransactions);
+            alreadyGeneratedTransactions,
+            windowCumulDiff);
 
         logger(Logging::INFO)
             << "Bootstrap anchor injected at height " << bootstrapHeight
