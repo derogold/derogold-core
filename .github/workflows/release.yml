@@ -84,6 +84,9 @@ jobs:
 
       - name: Setup ccache
         uses: jianmingyong/ccache-action@v1
+        with:
+          ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
+          max-size: 150M
 
       - name: Pin GCC 9 (Linux)
         if: runner.os == 'Linux'
@@ -102,9 +105,6 @@ jobs:
             sudo update-alternatives --set aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9
             sudo update-alternatives --set aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9
           }
-        with:
-          ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
-          max-size: 150M
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.5
