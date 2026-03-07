@@ -1034,10 +1034,13 @@ bool DaemonCommandsHandler::export_bootstrap_state(const std::vector<std::string
             windowCumulDiff = cumulativeDifficulty
                               - m_core.getCumulativeDifficulty(targetHeight - windowSize);
         }
+        /* CachedBlockInfo is never pruned – always fetch timestamp from here,
+         * overriding any 0 that was left by a pruned getBlockDetails path above. */
+        blockTimestamp = m_core.getBlockTimestampByIndex(targetHeight);
     }
     catch (const std::exception &e)
     {
-        std::cout << WarningMsg("Could not fetch difficulty data: ") << e.what() << std::endl;
+        std::cout << WarningMsg("Could not fetch difficulty/timestamp data: ") << e.what() << std::endl;
         return false;
     }
 
