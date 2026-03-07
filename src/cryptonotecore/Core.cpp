@@ -128,12 +128,6 @@ namespace CryptoNote
             return blockTemplate;
         }
 
-        Crypto::Hash getBlockHash(const RawBlock &block)
-        {
-            BlockTemplate blockTemplate = extractBlockTemplate(block);
-            return CachedBlock(blockTemplate).getBlockHash();
-        }
-
         TransactionValidatorState extractSpentOutputs(const CachedTransaction &transaction)
         {
             TransactionValidatorState spentOutputs;
@@ -2774,8 +2768,6 @@ namespace CryptoNote
         const std::string filePath,
         const bool performExpensiveValidation)
     {
-        IBlockchainCache *mainChain = chainsLeaves[0];
-
         uint64_t currentIndex = chainsLeaves[0]->getTopBlockIndex() + 1;
 
         std::cout << "Existing DB has currentIndex: " << currentIndex << std::endl;

@@ -40,14 +40,7 @@
 
 #endif
 
-// ANDROID, FreeBSD, and OpenBSD also don't need timeb.h
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
-
-#include <sys/timeb.h>
-
-#else
 #include <sys/time.h>
-#endif
 
 #ifdef _WIN32
 
@@ -627,27 +620,6 @@ OAES_RET oaes_sprintf(char *buf, size_t *buf_len, const uint8_t *data, size_t da
 #ifdef OAES_HAVE_ISAAC
 static void oaes_get_seed(char buf[RANDSIZ + 1])
 {
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
-    struct timeb timer;
-    struct tm *gmTimer;
-    char *_test = NULL;
-
-    ftime(&timer);
-    gmTimer = gmtime(&timer.time);
-    _test = (char *)calloc(sizeof(char), timer.millitm);
-    sprintf(
-        buf,
-        "%04d%02d%02d%02d%02d%02d%03d%p%d",
-        gmTimer->tm_year + 1900,
-        gmTimer->tm_mon + 1,
-        gmTimer->tm_mday,
-        gmTimer->tm_hour,
-        gmTimer->tm_min,
-        gmTimer->tm_sec,
-        timer.millitm,
-        _test + timer.millitm,
-        getpid());
-#else
     struct timeval timer;
     struct tm *gmTimer;
     char *_test = NULL;
@@ -667,7 +639,6 @@ static void oaes_get_seed(char buf[RANDSIZ + 1])
         timer.tv_usec / 1000,
         _test + timer.tv_usec / 1000,
         getpid());
-#endif
 
     if (_test)
         free(_test);
@@ -676,18 +647,6 @@ static void oaes_get_seed(char buf[RANDSIZ + 1])
 
 static uint32_t oaes_get_seed(void)
 {
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
-    struct timeb timer;
-    struct tm *gmTimer;
-    char *_test = NULL;
-    uint32_t _ret = 0;
-
-    ftime(&timer);
-    gmTimer = gmtime(&timer.time);
-    _test = (char *)calloc(sizeof(char), timer.millitm);
-    _ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday + gmTimer->tm_hour + gmTimer->tm_min
-           + gmTimer->tm_sec + timer.millitm + (uintptr_t)(_test + timer.millitm) + getpid();
-#else
     struct timeval timer;
     struct tm *gmTimer;
     char *_test = NULL;
@@ -698,7 +657,6 @@ static uint32_t oaes_get_seed(void)
     _test = (char *)calloc(sizeof(char), timer.tv_usec / 1000);
     _ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday + gmTimer->tm_hour + gmTimer->tm_min
            + gmTimer->tm_sec + timer.tv_usec / 1000 + (uintptr_t)(_test + timer.tv_usec / 1000) + getpid();
-#endif
 
     if (_test)
     {

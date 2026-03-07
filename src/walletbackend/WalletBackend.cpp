@@ -1079,9 +1079,11 @@ std::vector<WalletTypes::Transaction>
         {
             return std::vector<WalletTypes::Transaction> {};
         }
-    } catch (const std::exception &e)
+    } catch (const std::exception &)
     {
     }
+
+    return result;
 }
 
 std::tuple<uint64_t, std::string> WalletBackend::getNodeFee() const

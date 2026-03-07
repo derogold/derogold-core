@@ -162,8 +162,7 @@ template<typename T> class ThreadSafeQueue
         /* Stopping, don't return data */
         if (m_shouldStop)
         {
-            T item;
-            return item;
+            return m_stoppedSentinel;
         }
 
         /* Wait for data to become available (releases the lock whilst
@@ -181,8 +180,7 @@ template<typename T> class ThreadSafeQueue
         /* Stopping, don't return data */
         if (m_shouldStop)
         {
-            T item;
-            return item;
+            return m_stoppedSentinel;
         }
 
         /* Get the first item in the queue */
@@ -191,6 +189,10 @@ template<typename T> class ThreadSafeQueue
 
     /* The deque data structure */
     std::queue<T> m_queue;
+
+    /* Sentinel value returned (by reference) when the queue is stopped,
+       so we never return a reference to a local variable. */
+    T m_stoppedSentinel{};
 
     /* The mutex, to ensure we have atomic access to the queue */
     mutable std::mutex m_mutex;
