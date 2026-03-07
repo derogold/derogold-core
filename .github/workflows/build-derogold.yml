@@ -168,6 +168,8 @@ jobs:
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "^3.31.11"
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
