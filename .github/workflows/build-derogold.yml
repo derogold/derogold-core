@@ -1,6 +1,7 @@
 name: Build DeroGold
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "development"
@@ -66,7 +67,7 @@ jobs:
             build_preset: windows-x64-mingw-clang-package
             run_cryptotest: true
 
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             arch: x64
             compiler: gcc
             install: >-
@@ -83,7 +84,7 @@ jobs:
             build_preset: linux-x64-gcc-package
             run_cryptotest: true
 
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             arch: arm64
             compiler: gcc
             install: >-
@@ -100,7 +101,7 @@ jobs:
             build_preset: linux-arm64-gcc-cross-package
             run_cryptotest: false
 
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             arch: x64
             compiler: gcc
             install: >-
@@ -117,7 +118,7 @@ jobs:
             build_preset: linux-x64-gcc-package
             run_cryptotest: true
 
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             arch: arm64
             compiler: gcc
             install: >-
@@ -180,7 +181,7 @@ jobs:
           msystem: ${{ matrix.msys2_environment }}
 
       - name: Setup ccache
-        uses: jianmingyong/ccache-action@v1
+        uses: jianmingyong/ccache-action@v1.4.0
         with:
           ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
           max-size: 150M
