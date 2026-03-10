@@ -35,7 +35,7 @@
 - miniupnpc 2.3.2
 - openssl 3.6.1
 - rapidjson 2025-02-26
-- rocksdb 10.10.1
+- rocksdb 9.10.0
 
 # Install Notes
 
