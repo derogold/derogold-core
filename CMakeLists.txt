@@ -98,7 +98,6 @@ else()
 endif()
 
 # Set vcpkg toolchain options
-set(VCPKG_OVERLAY_PORTS "${CMAKE_SOURCE_DIR}/ports")
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_SOURCE_DIR}/triplets")
 set(VCPKG_INSTALL_OPTIONS "--clean-after-build")
 
