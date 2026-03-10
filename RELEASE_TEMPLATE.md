@@ -6,7 +6,6 @@
 - Fixed daemon rpc method would fail due to missing transactions.
 - Fixed `--db-*` options such that it will no longer get overridden by default values.
 - Added `--db-optimize` option to optimize your database for reading.
-- Added `--export-checkpoints` option to export checkpoints.csv for bootstrapping.
 - Added `--enable-trtl-rpc` option to enable turtlecoin rpc api.
 - Changed `--db-enable-compression` to true by default.
 - Changed `status` command behaviour so that it doesn't rely on rpc anymore.
@@ -25,19 +24,18 @@
 
 ## RocksDB
 - Update RocksDB provider to v9.2.1.
-- Changed RocksDB default read/write buffer to 2048 MB and 1024 MB respectively.
+- Changed RocksDB default read/write buffer to 256 MB and 64 MB respectively.
 - Changed RocksDB logger output and reduced the file history to 1.
 
 ## External Dependencies Version
-- boost 1.86.0
-- cpp-httplib 0.18.0
-- cryptopp 8.9.0
-- cxxopts 3.2.1
-- leveldb 1.23
-- miniupnpc 2.3.7
-- openssl 3.4.0
-- rapidjson 2023-07-17
-- rocksdb 9.7.2
+- boost 1.90.0
+- cpp-httplib 0.37.0
+- cryptopp 2026-03-02
+- cxxopts 3.3.1
+- miniupnpc 2.3.2
+- openssl 3.6.1
+- rapidjson 2025-02-26
+- rocksdb 10.10.1
 
 # Install Notes
 
