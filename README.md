@@ -182,7 +182,7 @@ Building via CLI:
 # For native x64 builds
 #########################
 git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
+cd derogold-core
 CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=x64-linux-release -G Ninja -S . -B build
 cmake --build build
 sudo cmake --install build
