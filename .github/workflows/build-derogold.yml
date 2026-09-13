@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - "master"
       - "development"
   pull_request:
     branches:
+      - "master"
       - "development"
   schedule:
     - cron: 0 0 * * 0
@@ -26,47 +28,12 @@ jobs:
     
     concurrency: 
       group: build_derogold_${{ github.ref }}_${{ matrix.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
+      cancel-in-progress: true
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            arch: x64
-            compiler: msvc
-            install: ""
-            configure_preset: windows-x64-msvc-package
-            build_preset: windows-x64-msvc-package
-            run_cryptotest: true
-
-          - os: windows-latest
-            arch: x64
-            compiler: gcc
-            install: ""
-            msys2_environment: MINGW64
-            msys2_install: >-
-              mingw-w64-x86_64-ccache
-              mingw-w64-x86_64-cmake
-              mingw-w64-x86_64-ninja
-              mingw-w64-x86_64-toolchain
-            configure_preset: windows-x64-mingw-gcc-package
-            build_preset: windows-x64-mingw-gcc-package
-            run_cryptotest: true
-
-          - os: windows-latest
-            arch: x64
-            compiler: clang
-            install: ""
-            msys2_environment: CLANG64
-            msys2_install: >-
-              mingw-w64-clang-x86_64-ccache
-              mingw-w64-clang-x86_64-cmake
-              mingw-w64-clang-x86_64-ninja
-              mingw-w64-clang-x86_64-toolchain
-            configure_preset: windows-x64-mingw-clang-package
-            build_preset: windows-x64-mingw-clang-package
-            run_cryptotest: true
-
           - os: ubuntu-22.04
             arch: x64
             compiler: gcc
@@ -137,7 +104,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -205,7 +172,7 @@ jobs:
           buildPreset: '${{ matrix.build_preset }}'
 
       - name: Collect Logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-vcpkg-build-logs
@@ -213,7 +180,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: success() 
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-build
