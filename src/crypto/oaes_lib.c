@@ -650,10 +650,12 @@ static uint32_t oaes_get_seed(void)
     struct timeval timer;
     struct tm *gmTimer;
     char *_test = NULL;
+    time_t timerSeconds;
     uint32_t _ret = 0;
 
     gettimeofday(&timer, NULL);
-    gmTimer = gmtime(&timer.tv_sec);
+    timerSeconds = (time_t)timer.tv_sec;
+    gmTimer = gmtime(&timerSeconds);
     _test = (char *)calloc(sizeof(char), timer.tv_usec / 1000);
     _ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday + gmTimer->tm_hour + gmTimer->tm_min
            + gmTimer->tm_sec + timer.tv_usec / 1000 + (uintptr_t)(_test + timer.tv_usec / 1000) + getpid();
