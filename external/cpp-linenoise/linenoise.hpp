@@ -182,7 +182,7 @@ inline bool is_digit(char c) { return '0' <= c && c <= '9'; }
 
 // ========== Global variables and constants
 
-HANDLE    hConOut;      // handle to CONOUT$
+inline HANDLE hConOut; // handle to CONOUT$
 
 const char ESC = '\x1B'; // ESCape character
 const char BEL = '\x07';
@@ -190,15 +190,15 @@ const char SO = '\x0E';  // Shift Out
 const char SI = '\x0F';  // Shift In
 
 const int MAX_ARG = 16;     // max number of args in an escape sequence
-int   state;                // automata state
-WCHAR prefix;               // escape sequence prefix ( '[', ']' or '(' );
-WCHAR prefix2;              // secondary prefix ( '?' or '>' );
-WCHAR suffix;               // escape sequence suffix
-int   es_argc;              // escape sequence args count
-int   es_argv[MAX_ARG];     // escape sequence args
-WCHAR Pt_arg[MAX_PATH * 2]; // text parameter for Operating System Command
-int   Pt_len;
-BOOL  shifted;
+inline int state;                // automata state
+inline WCHAR prefix;             // escape sequence prefix ( '[', ']' or '(' );
+inline WCHAR prefix2;            // secondary prefix ( '?' or '>' );
+inline WCHAR suffix;             // escape sequence suffix
+inline int es_argc;              // escape sequence args count
+inline int es_argv[MAX_ARG];     // escape sequence args
+inline WCHAR Pt_arg[MAX_PATH * 2]; // text parameter for Operating System Command
+inline int Pt_len;
+inline BOOL shifted;
 
 
 // DEC Special Graphics Character Set from
@@ -289,17 +289,17 @@ const BYTE attr2ansi[8] =       // map console attribute to ANSI number
     7                   // white
 };
 
-GRM grm;
+inline GRM grm;
 
 // saved cursor position
-COORD SavePos;
+inline COORD SavePos;
 
 // ========== Print Buffer functions
 
 #define BUFFER_SIZE 2048
 
-int   nCharInBuffer;
-WCHAR ChBuffer[BUFFER_SIZE];
+inline int nCharInBuffer;
+inline WCHAR ChBuffer[BUFFER_SIZE];
 
 //-----------------------------------------------------------------------------
 //   FlushBuffer()
@@ -928,9 +928,9 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
 
 } // namespace ansi
 
-HANDLE hOut;
-HANDLE hIn;
-DWORD consolemodeIn = 0;
+inline HANDLE hOut;
+inline HANDLE hIn;
+inline DWORD consolemodeIn = 0;
 
 inline int win32read(int *c) {
     DWORD foo;
