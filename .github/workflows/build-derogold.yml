@@ -28,6 +28,7 @@ jobs:
 
     concurrency:
       group: build_derogold_${{ github.ref }}_${{ matrix.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
+      cancel-in-progress: true
 
     strategy:
       fail-fast: false
@@ -165,7 +166,7 @@ jobs:
           buildPreset: '${{ matrix.build_preset }}'
 
       - name: Collect Logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-cmake-logs
@@ -173,7 +174,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: success()
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-build
