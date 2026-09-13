@@ -9,7 +9,7 @@
 #include "P2pProtocolTypes.h"
 #include "crypto/crypto.h"
 
-#include <boost/uuid/uuid.hpp>
+#include <Uuid.h>
 #include <config/CryptoNoteConfig.h>
 
 // new serialization
@@ -19,7 +19,7 @@
 
 namespace CryptoNote
 {
-    inline bool serialize(boost::uuids::uuid &v, Common::StringView name, ISerializer &s)
+    inline bool serialize(Common::Uuid &v, Common::StringView name, ISerializer &s)
     {
         return s.binary(&v, sizeof(v), name);
     }
@@ -46,7 +46,7 @@ namespace CryptoNote
 
     struct basic_node_data
     {
-        boost::uuids::uuid network_id;
+        Common::Uuid network_id;
 
         uint8_t version;
 

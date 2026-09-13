@@ -6,15 +6,62 @@
 
 #include "CommonLogger.h"
 
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+
 namespace Logging
 {
     namespace
     {
+        /* Render the local calendar date, replacing boost::posix_time's
+           ptime::date(). */
+        std::string formatDate(std::chrono::system_clock::time_point time)
+        {
+            const std::time_t asTimeT = std::chrono::system_clock::to_time_t(time);
+
+            std::tm local {};
+
+#ifdef _WIN32
+            localtime_s(&local, &asTimeT);
+#else
+            localtime_r(&asTimeT, &local);
+#endif
+
+            std::ostringstream s;
+            s << std::put_time(&local, "%Y-%m-%d");
+            return s.str();
+        }
+
+        /* Render the local time of day to microsecond resolution, replacing
+           ptime::time_of_day(). */
+        std::string formatTimeOfDay(std::chrono::system_clock::time_point time)
+        {
+            const std::time_t asTimeT = std::chrono::system_clock::to_time_t(time);
+
+            std::tm local {};
+
+#ifdef _WIN32
+            localtime_s(&local, &asTimeT);
+#else
+            localtime_r(&asTimeT, &local);
+#endif
+
+            const auto sinceEpoch = time.time_since_epoch();
+            const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(sinceEpoch);
+            const auto microseconds =
+                std::chrono::duration_cast<std::chrono::microseconds>(sinceEpoch - seconds).count();
+
+            std::ostringstream s;
+            s << std::put_time(&local, "%H:%M:%S") << '.' << std::setfill('0') << std::setw(6) << microseconds;
+            return s.str();
+        }
+
         std::string formatPattern(
             const std::string &pattern,
             const std::string &category,
             Level level,
-            boost::posix_time::ptime time)
+            std::chrono::system_clock::time_point time)
         {
             std::stringstream s;
 
@@ -31,10 +78,10 @@ namespace Logging
                             s << category;
                             break;
                         case 'D':
-                            s << time.date();
+                            s << formatDate(time);
                             break;
                         case 'T':
-                            s << time.time_of_day();
+                            s << formatTimeOfDay(time);
                             break;
                         case 'L':
                             s << std::setw(7) << std::left << ILogger::LEVEL_NAMES[level];
@@ -55,7 +102,7 @@ namespace Logging
     } // namespace
 
     void CommonLogger::
-        operator()(const std::string &category, Level level, boost::posix_time::ptime time, const std::string &body)
+        operator()(const std::string &category, Level level, std::chrono::system_clock::time_point time, const std::string &body)
     {
         if (level <= logLevel && disabledCategories.count(category) == 0)
         {

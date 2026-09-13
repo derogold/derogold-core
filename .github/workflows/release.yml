@@ -21,27 +21,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            arch: x64
-            compiler: msvc
-            install: ""
-            configure_preset: windows-x64-msvc-package
-            build_preset: windows-x64-msvc-package
-
+          # Linux only. Windows packages are produced by the MSYS2 MinGW jobs
+          # in build-derogold.yml; there is no MSVC job anywhere, because with
+          # vcpkg gone there is no OpenSSL package source for MSVC.
           - os: ubuntu-22.04
             arch: x64
             compiler: gcc
             install: >-
               build-essential
-              curl
-              gcc-9
-              g++-9
+              cmake
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-x64-gcc-package
             build_preset: linux-x64-gcc-package
 
@@ -49,65 +41,39 @@ jobs:
             arch: arm64
             compiler: gcc
             install: >-
-              curl
-              gcc-9-aarch64-linux-gnu
-              g++-9-aarch64-linux-gnu
+              cmake
+              crossbuild-essential-arm64
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-arm64-gcc-cross-package
             build_preset: linux-arm64-gcc-cross-package
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
 
       - name: Install Prerequisites
+        if: runner.os == 'Linux'
         run: |
-          if ("${{ runner.os }}" -eq "Linux")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              sudo apt-get update
-              sudo apt-get install -y ${{ matrix.install }}
-            }
-          }
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.install }}
 
       - name: Install CMake
         uses: lukka/get-cmake@v3.31.6
 
       - name: Setup ccache
-        uses: jianmingyong/ccache-action@v1
+        uses: jianmingyong/ccache-action@v1.4.0
         with:
           ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
           max-size: 150M
 
-      - name: Pin GCC 9 (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          if ("${{ matrix.arch }}" -eq "x64")
-          {
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9
-            sudo update-alternatives --set gcc /usr/bin/gcc-9
-            sudo update-alternatives --set g++ /usr/bin/g++-9
-          }
-          elseif ("${{ matrix.arch }}" -eq "arm64")
-          {
-            sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9 9
-            sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9 9
-            sudo update-alternatives --set aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-9
-            sudo update-alternatives --set aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-9
-          }
-
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.5
+      # The GCC 9 pin that used to live here is gone. The bundled RocksDB
+      # builds as C++20, which GCC 9 cannot do, so these jobs now use the
+      # runner's default compiler.
 
       - name: Build
         uses: lukka/run-cmake@v10.8
@@ -119,8 +85,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-vcpkg-build-logs
-          path: ${{ github.workspace }}/vcpkg/buildtrees/**/*.log
+          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-cmake-logs
+          path: ${{ github.workspace }}/build/**/*.log
           if-no-files-found: ignore
 
       - name: Upload Package Artifact
@@ -131,6 +97,7 @@ jobs:
           path: |
             ${{ github.workspace }}/build/Packaging/*.zip
             ${{ github.workspace }}/build/Packaging/*.tar.gz
+            ${{ github.workspace }}/build/Packaging/*.deb
           if-no-files-found: ignore
 
   release:
@@ -140,7 +107,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -159,3 +126,4 @@ jobs:
           files: |
             ${{ github.workspace }}/build/*.zip
             ${{ github.workspace }}/build/*.tar.gz
+            ${{ github.workspace }}/build/*.deb

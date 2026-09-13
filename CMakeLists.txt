@@ -19,89 +19,24 @@ else()
     message(CHECK_PASS "${CMAKE_BINARY_DIR_NORMAL}")
 endif()
 
-message(CHECK_START "Finding vcpkg installation")
-
-if(EXISTS "${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
-    set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg")
-elseif(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    set(VCPKG_ROOT "$ENV{VCPKG_ROOT}")
-else()
-    message(WARNING "vcpkg installation is missing from your source. Did you forget to clone with --recursive flag?")
-
-    find_package(Git QUIET)
-
-    if(Git_FOUND)
-        if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
-            execute_process(COMMAND "${GIT_EXECUTABLE}" submodule update --init --recursive WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" RESULT_VARIABLE GIT_SUBMODULE_INIT_RESULT)
-
-            if(GIT_SUBMODULE_INIT_RESULT)
-                message(CHECK_FAIL "not found")
-                message(FATAL_ERROR "Unable to initialize vcpkg submodule.")
-            endif()
-        else()
-            execute_process(COMMAND "${GIT_EXECUTABLE}" clone https://github.com/microsoft/vcpkg WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" RESULT_VARIABLE GIT_CLONE_RESULT)
-
-            if(GIT_CLONE_RESULT)
-                message(CHECK_FAIL "not found")
-                message(FATAL_ERROR "Unable to initialize vcpkg submodule.")
-            endif()
-        endif()
-    else()
-        message(CHECK_FAIL "not found")
-        message(FATAL_ERROR "Git not found. Unable to initialize vcpkg submodule.")
-    endif()
-
-    set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg")
-endif()
-
-message(CHECK_PASS "${VCPKG_ROOT}")
-
-if(DEFINED CMAKE_TOOLCHAIN_FILE)
-    file(REAL_PATH ${CMAKE_TOOLCHAIN_FILE} CMAKE_TOOLCHAIN_FILE_ABSOLUTE)
-    file(TO_CMAKE_PATH ${CMAKE_TOOLCHAIN_FILE_ABSOLUTE} CMAKE_TOOLCHAIN_FILE_NORMAL)
-    
-    if (NOT CMAKE_TOOLCHAIN_FILE_NORMAL STREQUAL "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-        message(WARNING "You are trying to override CMAKE_TOOLCHAIN_FILE which is required for vcpkg. Set VCPKG_CHAINLOAD_TOOLCHAIN_FILE instead.")
-        set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE_ABSOLUTE}")
-    endif()
-endif()
-
-set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-
-set(SUPPORTED_VCPKG_TARGET_TRIPLET
-    "x64-windows-static"
-    "x64-windows-static-release"
-    "x64-mingw-static"
-    "x64-mingw-static-release"
-    "x64-linux"
-    "x64-linux-clang"
-    "x64-linux-release"
-    "x64-linux-release-clang"
-    "arm64-linux"
-    "arm64-linux-clang"
-    "arm64-linux-release"
-    "arm64-linux-release-clang"
-    "x64-osx"
-    "x64-osx-release")
-
-message(CHECK_START "Finding VCPKG_TARGET_TRIPLET")
-
-if(NOT DEFINED VCPKG_TARGET_TRIPLET AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-    message(CHECK_FAIL "not found")
-    message(FATAL_ERROR "Please include -D VCPKG_TARGET_TRIPLET=x64-windows-static-release (MSVC) or -D VCPKG_TARGET_TRIPLET=x64-mingw-static-release (MINGW64/CLANG64) in your CMake command to continue.")
-elseif(DEFINED VCPKG_TARGET_TRIPLET AND NOT VCPKG_TARGET_TRIPLET IN_LIST SUPPORTED_VCPKG_TARGET_TRIPLET)
-    message(CHECK_FAIL "${VCPKG_TARGET_TRIPLET}")
-    list(JOIN SUPPORTED_VCPKG_TARGET_TRIPLET "\n" SUPPORTED_VCPKG_TARGET_TRIPLET_STRING)
-    message(FATAL_ERROR "Invalid VCPKG_TARGET_TRIPLET selected.\nSupported Triplet(s):\n${SUPPORTED_VCPKG_TARGET_TRIPLET_STRING}")
-else()
-    message(CHECK_PASS "${VCPKG_TARGET_TRIPLET}")
-endif()
-
-# Set vcpkg toolchain options
-set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_SOURCE_DIR}/triplets")
-set(VCPKG_INSTALL_OPTIONS "--clean-after-build")
-
 project(DeroGold VERSION 1.0.1.0 HOMEPAGE_URL https://derogold.com LANGUAGES C CXX ASM)
+
+# Dependencies come from three places, no package manager involved:
+#
+#   1. Libraries vendored under external/ and built with the project:
+#      rapidjson, cpp-httplib, cxxopts, nlohmann-json and cpp-linenoise are
+#      header-only; Crypto++ and miniupnpc are compiled from their checked-in
+#      sources, as are zstd and RocksDB. All of them are pinned by being in
+#      the tree, so none can drift underneath a build and none has to be
+#      installed first.
+#   2. OpenSSL, taken from the system. It is large, ubiquitous and
+#      packaged everywhere. See BUILDING.md.
+#   3. RocksDB, which is built from source by default because the version
+#      packaged by most distributions is older than this code requires.
+#      Set -D DEROGOLD_SYSTEM_ROCKSDB=ON to use the system one instead.
+
+option(DEROGOLD_SYSTEM_ROCKSDB
+    "Link the system RocksDB instead of building it from source" OFF)
 
 include(CTest)
 
@@ -319,14 +254,34 @@ if(NOT MSVC)
     endif()
 endif()
 
-find_package(Boost CONFIG REQUIRED COMPONENTS serialization)
-find_package(httplib CONFIG REQUIRED)
-find_package(cryptopp CONFIG REQUIRED)
-find_package(cxxopts CONFIG REQUIRED)
-find_package(miniupnpc CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(RapidJSON CONFIG REQUIRED)
-find_package(RocksDB CONFIG REQUIRED)
+##############################################################################
+# Vendored header-only dependencies
+#
+# These live in external/, which is already on the include path, so the
+# targets below exist purely to keep the names used by target_link_libraries
+# unchanged.
+##############################################################################
+
+add_library(rapidjson INTERFACE)
+
+add_library(cxxopts_vendored INTERFACE)
+add_library(cxxopts::cxxopts ALIAS cxxopts_vendored)
+
+add_library(httplib_vendored INTERFACE)
+add_library(httplib::httplib ALIAS httplib_vendored)
+
+##############################################################################
+# System dependencies
+##############################################################################
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
+
+include(DeroGoldDependencies)
+
+derogold_require_openssl()
+derogold_add_cryptopp()
+derogold_add_miniupnpc()
+derogold_require_rocksdb()
 
 # So we can use std::string with rapidjson
 add_compile_definitions(RAPIDJSON_HAS_STDSTRING)

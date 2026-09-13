@@ -52,7 +52,13 @@ namespace System
 
         static_assert(Dispatcher::SIZEOF_PTHREAD_MUTEX_T == sizeof(pthread_mutex_t), "invalid pthread mutex size");
 
-        const size_t STACK_SIZE = 64 * 1024;
+        /* 1 MB per fiber stack. The original 64 KB was large enough to be
+           overflowed by deep call chains (block validation, RocksDB reads),
+           and these stacks are plain heap allocations with no guard page, so
+           an overflow silently corrupts the neighbouring heap chunk — often
+           another fiber's stack or a ContextPair — which presents later as a
+           garbage pointer coming out of epoll. */
+        const size_t STACK_SIZE = 1024 * 1024;
 
     }; // namespace
 

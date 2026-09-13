@@ -48,7 +48,11 @@ class PeerlistManager
 
     bool set_peer_just_seen(uint64_t peer, const NetworkAddress &addr);
 
-    bool set_peer_unreachable(const PeerlistEntry &pr);
+    /* Drop an address that turned out to be dead. Without these the lists
+       only ever grow, and a peer that goes away is retried forever. */
+    bool remove_from_gray(const NetworkAddress &addr);
+
+    bool remove_from_white(const NetworkAddress &addr);
 
     bool is_ip_allowed(uint32_t ip) const;
 

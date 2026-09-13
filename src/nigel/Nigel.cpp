@@ -8,6 +8,7 @@
 ////////////////////////
 
 #include <common/CryptoNoteTools.h>
+#include <common/IpcSocket.h>
 #include <config/CryptoNoteConfig.h>
 #include <cryptonotecore/CachedBlock.h>
 #include <cryptonotecore/Core.h>
@@ -30,6 +31,22 @@ inline std::shared_ptr<httplib::Client> getClient(
 {
     std::shared_ptr<httplib::Client> client;
 
+    /* A daemon address that is an absolute path, or an "@name" abstract
+       socket, names a local socket rather than a host. Nothing resolvable can
+       look like either, so the two cannot be confused. The port is meaningless
+       for a socket; httplib wants one anyway and ignores it. */
+    if (Common::Ipc::looksLikePath(daemonHost))
+    {
+        client = std::make_shared<httplib::Client>(daemonHost.c_str(), 80);
+        Common::Ipc::configureClient(*client);
+
+        client->set_connection_timeout(timeout);
+        client->set_read_timeout(timeout);
+        client->set_write_timeout(timeout);
+
+        return client;
+    }
+
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (daemonSSL)
     {
@@ -44,6 +61,16 @@ inline std::shared_ptr<httplib::Client> getClient(
 #endif
 
     client->set_connection_timeout(timeout);
+
+    /* Set the read and write timeouts explicitly. Only the connection timeout
+       was set, leaving these at whatever the library defaults to, which has
+       changed between cpp-httplib versions and is five seconds in the pinned
+       one. A daemon that needs longer than that to start a response had its
+       request abandoned mid-flight while it carried on building the answer, so
+       the wallet retried and the daemon piled up duplicate work. */
+    client->set_read_timeout(timeout);
+    client->set_write_timeout(timeout);
+
     return client;
 }
 
@@ -118,7 +145,7 @@ void Nigel::resetRequestedBlockCount()
     m_blockCount = CryptoNote::BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
 }
 
-std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<WalletTypes::TopBlock>>
+std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<WalletTypes::TopBlock>, uint64_t>
     Nigel::getWalletSyncData(
         const std::vector<Crypto::Hash> blockHashCheckpoints,
         const uint64_t startHeight,
@@ -142,6 +169,18 @@ std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<Wallet
     );
 
     const auto res = m_nodeClient->Post(endpoint, m_requestHeaders, j.dump(), "application/json");
+
+    /* A 400 here is the daemon answering this request rather than failing at
+       it - it has looked at our block hashes and will not serve us. Retrying
+       cannot change that answer, so carry the reason up to where somebody can
+       read it instead of asking again forever behind a height that never
+       moves. */
+    if (res && res->status == 400)
+    {
+        setSyncError(extractDaemonError(res->body));
+
+        return {false, {}, std::nullopt, 0};
+    }
 
     /* Daemon doesn't support /getrawblocks, fall back to /getwalletsyncdata */
     if (res && res->status == 404 && m_useRawBlocks)
@@ -179,6 +218,7 @@ std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<Wallet
 
                 walletBlock.blockHeight = cachedBlock.getBlockIndex();
                 walletBlock.blockHash = cachedBlock.getBlockHash();
+                walletBlock.blockPrevHash = block.previousBlockHash;
                 walletBlock.blockTimestamp = block.timestamp;
 
                 if (!skipCoinbaseTransactions)
@@ -199,6 +239,15 @@ std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<Wallet
             items = j.at("items").get<std::vector<WalletTypes::WalletBlockInfo>>();
         }
 
+        /* If the daemon sent pre-parsed wallet data for a pruned height range,
+           prepend those items so the wallet processes all heights in order.
+           Applies to both /getrawblocks and /getwalletsyncdata endpoints. */
+        if (j.find("prunedItems") != j.end())
+        {
+            auto prunedItems = j.at("prunedItems").get<std::vector<WalletTypes::WalletBlockInfo>>();
+            items.insert(items.begin(), prunedItems.begin(), prunedItems.end());
+        }
+
         std::optional<WalletTypes::TopBlock> topBlock;
 
         if (j.find("synced") != j.end() && j.find("topBlock") != j.end() && j.at("synced").get<bool>())
@@ -206,17 +255,49 @@ std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<Wallet
             topBlock = j.at("topBlock").get<WalletTypes::TopBlock>();
         }
 
-        return std::make_tuple(items, topBlock);
+        const uint64_t pruneFloor =
+            (j.find("pruneFloor") != j.end()) ? j.at("pruneFloor").get<uint64_t>() : 0;
+
+        return std::make_tuple(items, topBlock, pruneFloor);
     });
 
     if (parsedResponse)
     {
-        const auto [ items, topBlock ] = *parsedResponse;
+        const auto [ items, topBlock, pruneFloor ] = *parsedResponse;
 
-        return { true, items, topBlock };
+        /* Served, so whatever the daemon last refused us for no longer holds. */
+        setSyncError("");
+
+        return { true, items, topBlock, pruneFloor };
     }
 
-    return { false, {}, std::nullopt };
+    return { false, {}, std::nullopt, 0 };
+}
+
+/* Pulls the reason out of a daemon's failure body, which is
+   {"status": "Failed", "error": "..."}. A body that is not that shape still
+   has to say something, so it is reported as it arrived. */
+std::string Nigel::extractDaemonError(const std::string &body)
+{
+    try
+    {
+        const auto j = nlohmann::json::parse(body);
+
+        if (j.find("error") != j.end() && j.at("error").is_string())
+        {
+            return j.at("error").get<std::string>();
+        }
+    }
+    catch (const std::exception &)
+    {
+    }
+
+    if (body.empty())
+    {
+        return "The daemon refused to serve this wallet blocks, and gave no reason";
+    }
+
+    return body;
 }
 
 void Nigel::stop()
@@ -275,10 +356,31 @@ bool Nigel::getDaemonInfo()
             m_networkBlockCount--;
         }
 
-        m_peerCount =
-            j.at("incoming_connections_count").get<uint64_t>() + j.at("outgoing_connections_count").get<uint64_t>();
+        /* A daemon that does not report its connections is still worth having
+           heights from, so a missing count is zero rather than a thrown-away
+           update. */
+        m_peerCount = j.value("incoming_connections_count", static_cast<uint64_t>(0))
+                      + j.value("outgoing_connections_count", static_cast<uint64_t>(0));
 
-        m_lastKnownHashrate = j.at("difficulty").get<uint64_t>() / CryptoNote::parameters::DIFFICULTY_TARGET;
+        /* The daemon divides the difficulty by the block time in force at its
+           own height and ships the result in this same response, so take it
+           from there.
+
+           This used to divide by DIFFICULTY_TARGET here - the launch-era ten
+           seconds - on a chain that has targeted three hundred since
+           DIFFICULTY_TARGET_V3_HEIGHT, so every wallet reported thirty times
+           the real network hashrate. Daemons predating the field fall back to
+           the same division, against the right target this time. */
+        if (j.find("hashrate") != j.end())
+        {
+            m_lastKnownHashrate = j.at("hashrate").get<uint64_t>();
+        }
+        else if (j.find("difficulty") != j.end())
+        {
+            const uint64_t blockTime = CryptoNote::parameters::getCurrentDifficultyTarget(m_networkBlockCount);
+
+            m_lastKnownHashrate = j.at("difficulty").get<uint64_t>() / blockTime;
+        }
 
         /* Look to see if the isCacheApi property exists in the response
            and if so, set the internal value to whatever it found */
@@ -308,7 +410,11 @@ bool Nigel::getFeeInfo()
     const auto parsedResponse = tryParseJSONResponse(res, "Failed to update fee info", [this](const nlohmann::json j) {
         std::string tmpAddress = j.at("address").get<std::string>();
 
-        uint32_t tmpFee = j.at("amount").get<uint32_t>();
+        /* Read the full width the daemon writes. Reading it as uint32 silently
+           wrapped any node fee at or above 2^32 atomic units, so the wallet
+           could attach a fee far smaller than the node asked for and have the
+           transaction rejected. */
+        const uint64_t tmpFee = j.at("amount").get<uint64_t>();
 
         const bool integratedAddressesAllowed = false;
 
@@ -359,6 +465,32 @@ uint64_t Nigel::peerCount() const
 uint64_t Nigel::hashrate() const
 {
     return m_lastKnownHashrate;
+}
+
+std::string Nigel::syncError() const
+{
+    std::scoped_lock lock(m_syncErrorMutex);
+
+    return m_syncError;
+}
+
+void Nigel::setSyncError(const std::string &error)
+{
+    std::scoped_lock lock(m_syncErrorMutex);
+
+    if (m_syncError != error)
+    {
+        if (error.empty())
+        {
+            Logger::logger.log("Daemon is serving this wallet again", Logger::INFO, {Logger::SYNC, Logger::DAEMON});
+        }
+        else
+        {
+            Logger::logger.log(error, Logger::WARNING, {Logger::SYNC, Logger::DAEMON});
+        }
+    }
+
+    m_syncError = error;
 }
 
 std::tuple<uint64_t, std::string> Nigel::nodeFee() const

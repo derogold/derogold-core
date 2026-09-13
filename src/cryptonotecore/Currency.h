@@ -12,7 +12,6 @@
 #include "crypto/hash.h"
 #include "logging/LoggerRef.h"
 
-#include <boost/utility.hpp>
 #include <config/CryptoNoteConfig.h>
 #include <cstdint>
 #include <string>
@@ -404,9 +403,13 @@ namespace CryptoNote
         friend class CurrencyBuilder;
     };
 
-    class CurrencyBuilder : boost::noncopyable
+    class CurrencyBuilder
     {
       public:
+        CurrencyBuilder(const CurrencyBuilder &) = delete;
+
+        CurrencyBuilder &operator=(const CurrencyBuilder &) = delete;
+
         CurrencyBuilder(std::shared_ptr<Logging::ILogger> log);
 
         Currency currency()

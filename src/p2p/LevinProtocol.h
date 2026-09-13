@@ -34,6 +34,17 @@ namespace CryptoNote
 
     const int32_t LEVIN_PROTOCOL_RETCODE_SUCCESS = 1;
 
+    /* Largest packet accepted from an established peer. A response carrying a
+       full batch of blocks is the biggest legitimate message. */
+    const uint64_t LEVIN_DEFAULT_MAX_PACKET_SIZE = 100000000; // 100MB
+
+    /* Largest packet accepted before the peer has handshaked. The handshake
+       carries only sync data and a peer list, so anything approaching this is
+       already far beyond what an unauthenticated sender needs. Without a
+       separate limit, any host that completes a TCP connection could make this
+       node allocate the full 100MB by declaring it in a packet header. */
+    const uint64_t LEVIN_PRE_HANDSHAKE_MAX_PACKET_SIZE = 1024 * 1024; // 1MB
+
     class LevinProtocol
     {
       public:
@@ -73,7 +84,7 @@ namespace CryptoNote
             bool needReply() const;
         };
 
-        bool readCommand(Command &cmd);
+        bool readCommand(Command &cmd, uint64_t maxPacketSize = LEVIN_DEFAULT_MAX_PACKET_SIZE);
 
         void sendMessage(uint32_t command, const BinaryArray &out, bool needResponse);
 

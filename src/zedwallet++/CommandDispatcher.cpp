@@ -12,8 +12,8 @@
 #include <utilities/Input.h>
 #include <zedwallet++/AddressBook.h>
 #include <zedwallet++/CommandImplementations.h>
-#include <zedwallet++/Fusion.h>
 #include <zedwallet++/Open.h>
+#include <zedwallet++/Sweep.h>
 #include <zedwallet++/Transfer.h>
 #include <zedwallet++/Utilities.h>
 
@@ -53,9 +53,7 @@ bool handleCommand(
     }
     else if (command == "transfer")
     {
-        const bool sendAll = false;
-
-        transfer(walletBackend, sendAll);
+        transfer(walletBackend);
     }
     /* Advanced commands */
     else if (command == "ab_add")
@@ -100,21 +98,6 @@ bool handleCommand(
 
         listTransfers(printIncoming, printOutgoing, walletBackend);
     }
-    else if (command == "optimize")
-    {
-        std::cout << "Attempting to optimize your wallet to allow you to "
-                     "send large amounts at once.\n"
-                  << WarningMsg("This may take a very long time!\n");
-
-        if (!Utilities::confirm("Do you want to proceed?"))
-        {
-            std::cout << WarningMsg("Cancelling optimization.") << std::endl;
-        }
-        else
-        {
-            optimize(walletBackend);
-        }
-    }
     else if (command == "outgoing_transfers")
     {
         const bool printIncoming = false;
@@ -136,9 +119,9 @@ bool handleCommand(
     }
     else if (command == "send_all")
     {
-        const bool sendAll = true;
+        const bool sweepAll = true;
 
-        transfer(walletBackend, sendAll);
+        sweep(walletBackend, sweepAll);
     }
     else if (command == "set_log_level")
     {
@@ -151,6 +134,18 @@ bool handleCommand(
     else if (command == "swap_node")
     {
         swapNode(walletBackend);
+    }
+    else if (command == "sweep")
+    {
+        const bool sweepAll = false;
+
+        sweep(walletBackend, sweepAll);
+    }
+    else if (command == "sweep_all")
+    {
+        const bool sweepAll = true;
+
+        sweep(walletBackend, sweepAll);
     }
     /* This should never happen */
     else

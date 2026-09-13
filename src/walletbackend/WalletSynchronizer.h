@@ -39,8 +39,11 @@ class OrderByArrivalIndex
 {
   public:
     /* Ordering based on the arrival index of the blocks, not on the block
-       height. This is needed to ensure correct handling of network forks. */
-    bool operator()(SemiProcessedBlock a, SemiProcessedBlock b)
+       height. This is needed to ensure correct handling of network forks.
+       Takes both operands by const reference: by value, every comparison
+       copied two entire blocks with all their transactions, which for a
+       priority queue is thousands of full block copies per batch. */
+    bool operator()(const SemiProcessedBlock &a, const SemiProcessedBlock &b) const
     {
         return std::get<2>(a) > std::get<2>(b);
     }
@@ -102,6 +105,19 @@ class WalletSynchronizer
     void reset(uint64_t startHeight);
 
     uint64_t getCurrentScanHeight() const;
+
+    uint64_t getPruneFloor() const;
+
+    /* What the wallet has seen of chain reorganisations. A rollback removes
+       transactions that were already reported as confirmed, and nothing said
+       so - they simply stopped being listed, which anyone crediting on them
+       could not tell from a wallet reset. The count only ever increases, so a
+       caller polling it can tell that one happened between two polls without
+       having to catch it in the act.
+
+       In memory only: it counts what this run has seen, and starts again when
+       the wallet is reopened. */
+    std::tuple<uint64_t, uint64_t, uint64_t> getForkInfo() const;
 
     void swapNode(const std::shared_ptr<Nigel> daemon);
 
@@ -199,6 +215,15 @@ class WalletSynchronizer
 
     /* Amount of sync threads to run */
     unsigned int m_threadCount;
+
+    /* How many reorgs this run has resolved, the height of the most recent one
+       and how many blocks it threw away. Written by the block processing
+       thread, read by whoever asks for wallet status. */
+    std::atomic<uint64_t> m_forkCount = 0;
+
+    std::atomic<uint64_t> m_lastForkHeight = 0;
+
+    std::atomic<uint64_t> m_lastForkDepth = 0;
 
     /* Stores thread ids of the block output processing threads */
     std::vector<std::thread> m_syncThreads;

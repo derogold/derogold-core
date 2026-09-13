@@ -7,9 +7,13 @@
 //
 // Please see the included LICENSE file for more information.
 
+#include "AttachConsole.h"
+#include "ChainNotifier.h"
+#include "StratumServer.h"
 #include "DaemonCommandsHandler.h"
 #include "DaemonConfiguration.h"
 #include "common/CryptoNoteTools.h"
+#include "common/IpcSocket.h"
 #include "common/FileSystemShim.h"
 #include "common/PathTools.h"
 #include "common/ScopeExit.h"
@@ -41,6 +45,7 @@
 #endif
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <future>
 #include <thread>
@@ -49,6 +54,211 @@ using Common::JsonValue;
 using namespace CryptoNote;
 using namespace Logging;
 using namespace DaemonConfig;
+
+
+namespace
+{
+    /* Records how this database was built, so a later run cannot silently treat
+       an index-only chain as a complete one. Value is "lite:<height>".
+       See LITENODE.md. */
+    const std::string LITE_PROFILE_KEY = "lite_node_profile";
+
+    /* Written by DatabaseBlockchainCache the first time a database is opened.
+       Its absence is what tells us a database is brand new, which is the only
+       point at which lite mode may be chosen. Must match DB_VERSION_KEY in
+       DatabaseBlockchainCache.cpp. */
+    const std::string DB_SCHEME_VERSION_KEY = "db_scheme_version";
+
+    class StringSettingReadBatch : public IReadBatch
+    {
+      public:
+        explicit StringSettingReadBatch(std::string key): key(std::move(key)) {}
+
+        std::vector<std::string> getRawKeys() const override
+        {
+            return {key};
+        }
+
+        void submitRawResult(const std::vector<std::string> &values, const std::vector<bool> &states) override
+        {
+            if (values.size() != 1 || states.size() != 1 || !states[0])
+            {
+                return;
+            }
+
+            value = values[0];
+        }
+
+        std::optional<std::string> getValue() const
+        {
+            return value;
+        }
+
+      private:
+        std::string key;
+
+        std::optional<std::string> value;
+    };
+
+    class StringSettingWriteBatch : public IWriteBatch
+    {
+      public:
+        StringSettingWriteBatch(std::string key, std::string value):
+            key(std::move(key)),
+            value(std::move(value))
+        {
+        }
+
+        std::vector<std::pair<std::string, std::string>> extractRawDataToInsert() override
+        {
+            return {std::make_pair(key, value)};
+        }
+
+        std::vector<std::string> extractRawKeysToRemove() override
+        {
+            return {};
+        }
+
+      private:
+        std::string key;
+
+        std::string value;
+    };
+
+    std::optional<std::string> readStringSetting(IDataBase &database, const std::string &key)
+    {
+        StringSettingReadBatch readBatch(key);
+
+        if (const auto error = database.read(readBatch))
+        {
+            throw std::system_error(error);
+        }
+
+        return readBatch.getValue();
+    }
+
+    void writeStringSetting(IDataBase &database, const std::string &key, const std::string &value)
+    {
+        StringSettingWriteBatch writeBatch(key, value);
+
+        if (const auto error = database.write(writeBatch))
+        {
+            throw std::system_error(error);
+        }
+    }
+
+    /* Settles what lite height this database runs at, and refuses to run at all
+       when the flags and the database disagree. Whether a chain is stored in
+       full or index-only is baked in the moment the first block is written, so
+       it can never be changed later - only rebuilt from scratch.
+
+       Every disagreement here exits rather than recreating the database.
+       Dropping a chain because an operator forgot a flag would be the worst
+       possible reading of their intent, so the removal is always left to them.
+
+       Returns the lite height to build the cache with; 0 means full storage. */
+    uint32_t resolveLiteProfile(IDataBase &database, const DaemonConfiguration &config, LoggerRef &logger)
+    {
+        const auto storedProfile = readStringSetting(database, LITE_PROFILE_KEY);
+
+        /* No scheme version yet means DatabaseBlockchainCache has never opened
+           this database, so there is nothing in it to contradict. */
+        const bool databaseIsNew = !readStringSetting(database, DB_SCHEME_VERSION_KEY).has_value();
+
+        std::optional<uint32_t> storedLiteHeight;
+
+        if (storedProfile && storedProfile->rfind("lite:", 0) == 0)
+        {
+            try
+            {
+                storedLiteHeight = static_cast<uint32_t>(std::stoul(storedProfile->substr(5)));
+            }
+            catch (const std::exception &)
+            {
+                logger(ERROR, BRIGHT_RED)
+                    << "The lite-node marker in this database is unreadable. Refusing to start rather than guess "
+                       "how it was built. Remove the data directory to rebuild.";
+                exit(1);
+            }
+        }
+
+        if (!config.lite)
+        {
+            if (storedLiteHeight)
+            {
+                logger(ERROR, BRIGHT_RED)
+                    << "This database was built as a lite node from height " << *storedLiteHeight
+                    << ", so it does not hold the block data a full node serves. Restart with --lite --lite-height "
+                    << *storedLiteHeight << ", or delete the data directory to sync a full node from scratch.";
+                exit(1);
+            }
+
+            return 0;
+        }
+
+        /* --lite from here down. */
+        if (config.liteHeight == 0)
+        {
+            logger(ERROR, BRIGHT_RED)
+                << "--lite requires --lite-height, the height from which full block data is kept. There is no "
+                   "sensible default: it decides what this node can never serve or rescan again.";
+            exit(1);
+        }
+
+        if (config.prune)
+        {
+            logger(ERROR, BRIGHT_RED)
+                << "--lite and --prune cannot be combined. Pruning below the lite height would remove nothing, and "
+                   "above it would break the promise a lite node makes to serve every block from its lite height up.";
+            exit(1);
+        }
+
+        /* Every explorer endpoint reads the transaction records a lite node
+           drops, so below the lite height they answer with nothing rather than
+           fail. That is a node that looks like it works and quietly reports an
+           incomplete chain, which is worse than one that refuses to start. */
+        if (config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER)
+        {
+            logger(ERROR, BRIGHT_RED)
+                << "--lite and --daemon-mode explorer cannot be combined. Block and transaction lookups below the "
+                   "lite height need the transaction records a lite node never stores, so the explorer endpoints "
+                   "would return nothing for those heights rather than report an error.";
+            exit(1);
+        }
+
+        if (storedLiteHeight)
+        {
+            if (*storedLiteHeight != config.liteHeight)
+            {
+                logger(ERROR, BRIGHT_RED)
+                    << "This database was built as a lite node from height " << *storedLiteHeight << ", not "
+                    << config.liteHeight
+                    << ". The stored height cannot be changed - blocks below it were never written. Restart with "
+                       "--lite-height "
+                    << *storedLiteHeight << ", or delete the data directory to rebuild at a different height.";
+                exit(1);
+            }
+
+            return *storedLiteHeight;
+        }
+
+        if (!databaseIsNew)
+        {
+            logger(ERROR, BRIGHT_RED)
+                << "--lite can only be chosen for a new database. This one already holds a chain that was synced in "
+                   "full, and nothing here will delete it for you. Point --data-dir at an empty directory, or "
+                   "remove this one yourself, to build a lite node.";
+            exit(1);
+        }
+
+        writeStringSetting(database, LITE_PROFILE_KEY, "lite:" + std::to_string(config.liteHeight));
+
+        logger(INFO, BRIGHT_GREEN) << "Lite node mode enabled from height " << config.liteHeight
+                                   << ". This is permanent for this database.";
+
+        return config.liteHeight;
+    }
+} // namespace
 
 void print_genesis_tx_hex(const bool blockExplorerMode, const std::shared_ptr<LoggerManager> &logManager)
 {
@@ -168,6 +378,14 @@ int main(int argc, char *argv[])
                       << e.what() << std::endl;
             exit(1);
         }
+    }
+
+    /* --attach talks to a daemon that is already running. Handled before any
+       of the startup below, because none of it applies: no database is opened,
+       no ports are bound, and the data directory is not touched. */
+    if (!config.attachSocket.empty())
+    {
+        return Daemon::runAttachConsole(config.attachSocket);
     }
 
     /* If we were given the resync arg, we're deleting everything */
@@ -331,7 +549,9 @@ int main(int argc, char *argv[])
                            config.exclusiveNodes,
                            config.priorityNodes,
                            config.seedNodes,
-                           config.p2pResetPeerstate);
+                           config.p2pResetPeerstate,
+                           config.outPeers,
+                           config.inPeers);
 
         DataBaseConfig dbConfig(config.dataDirectory,
                                 config.dbThreads,
@@ -371,6 +591,11 @@ int main(int argc, char *argv[])
             dbShutdownOnExit.resume();
         }
 
+        /* Settle the lite profile before the cache is built: it decides how
+           every block from here on is written, and it can never change for a
+           database once the first block has landed. */
+        const uint32_t liteHeight = resolveLiteProfile(*database, config, logger);
+
         System::Dispatcher dispatcher;
         logger(INFO) << "Initializing core...";
 
@@ -380,7 +605,7 @@ int main(int argc, char *argv[])
             std::move(checkpoints),
             dispatcher,
             std::unique_ptr<IBlockchainCacheFactory>(
-                std::make_unique<DatabaseBlockchainCacheFactory>(*database, logger.getLogger())),
+                std::make_unique<DatabaseBlockchainCacheFactory>(*database, logger.getLogger(), liteHeight)),
             config.transactionValidationThreads);
 
         ccore->load();
@@ -522,6 +747,15 @@ int main(int argc, char *argv[])
 
         /* If we were told to rewind the blockchain to a certain height
            we will remove blocks until we're back at the height specified */
+        if (config.rewindToHeight > 0 && liteHeight != 0 && config.rewindToHeight < liteHeight)
+        {
+            logger(ERROR, BRIGHT_RED) << "Cannot rewind to " << config.rewindToHeight
+                                      << ": this lite node only stores full block data from " << liteHeight
+                                      << ". The blocks below that height were never stored, so there is nothing "
+                                         "to roll back to.";
+            return 1;
+        }
+
         if (config.rewindToHeight > 0)
         {
             logger(INFO) << "Rewinding blockchain to: " << config.rewindToHeight << std::endl;
@@ -568,6 +802,71 @@ int main(int argc, char *argv[])
 
         const auto p2psrv = std::make_shared<CryptoNote::NodeServer>(dispatcher, *cprotocol, logManager);
 
+        /* Explorer mode answers block and transaction lookups out of the raw
+           blocks, and out of the transaction and payment ID indexes that point
+           into them. None of that is written because the mode is on - a node
+           synced without --daemon-mode explorer already holds all of it - so
+           turning the mode on is a restart, not a resync, and there is no
+           separate index to build.
+
+           What the mode cannot conjure is a block this node never stored.
+           --prune deletes raw blocks below its floor and --sync-from-height
+           never downloads them, and every explorer answer ends up reading one:
+           even f_transaction_json resolves a transaction to its block index and
+           then reads that block. Report the position here, once, at startup,
+           rather than leaving an operator to discover it one failed query at a
+           time. */
+        if (explorerMode)
+        {
+            const uint32_t explorerFloor = std::max(ccore->getPruneFloor(), ccore->getSyncFloorHeight());
+
+            if (explorerFloor == 0)
+            {
+                logger(INFO, BRIGHT_GREEN)
+                    << "Explorer mode: this node holds full block data from the genesis block, so every height can "
+                       "be served.";
+            }
+            else
+            {
+                const bool pruned = ccore->getPruneFloor() > 0;
+
+                logger(WARNING, BRIGHT_YELLOW)
+                    << "Explorer mode: this node only holds full block data from height " << explorerFloor
+                    << " upward. Block and transaction lookups below that height will fail, because "
+                    << (pruned ? "--prune deleted those blocks" : "--sync-from-height never downloaded them")
+                    << ". What is missing is the block data itself, not an index, so no reindex can recover it - "
+                       "only downloading those blocks again. To serve the whole chain, resync this data directory "
+                       "from scratch with --resync --daemon-mode explorer, and leave --prune and --sync-from-height "
+                       "off. Serving only from height "
+                    << explorerFloor << " upward is a legitimate setup, so the node is starting either way.";
+            }
+        }
+
+        uint32_t ipcMode = Common::Ipc::DEFAULT_MODE;
+
+        if (!config.rpcIpcPath.empty())
+        {
+            if (!Common::Ipc::parseMode(config.rpcIpcMode, ipcMode))
+            {
+                logger(ERROR, BRIGHT_RED)
+                    << "--rpc-ipc-mode " << config.rpcIpcMode
+                    << " is not an octal permission triple. Use something like 0600 (owner only) or 0660 "
+                       "(owner and group).";
+                return 1;
+            }
+
+            /* The mode on the socket file is the whole of the access control -
+               there is no token in front of it - so a world-writable one is
+               worth saying out loud rather than quietly honouring. */
+            if ((ipcMode & 0007) != 0)
+            {
+                logger(WARNING, BRIGHT_YELLOW)
+                    << "--rpc-ipc-mode " << Common::Ipc::formatMode(ipcMode)
+                    << " lets any user on this machine drive the daemon, including its console. The file mode is "
+                       "the only thing guarding that socket.";
+            }
+        }
+
         RpcMode rpcMode = explorerMode ? RpcMode::BlockExplorerEnabled : RpcMode::Default;
 
         RpcServer rpcServer(config.rpcPort,
@@ -579,7 +878,12 @@ int main(int argc, char *argv[])
                             ccore,
                             p2psrv,
                             cprotocol,
-                            config.enableTrtlRpc);
+                            config.rpcIpcPath,
+                            ipcMode,
+                            config.rpcIpcGroup);
+
+        cprotocol->setSyncTuning(config.syncBatchMin, config.syncBatchMax, config.blockSyncBytes);
+        cprotocol->setLiteNodeConfig(liteHeight);
 
         cprotocol->set_p2p_endpoint(&*p2psrv);
         logger(INFO) << "Initializing p2p server...";
@@ -596,6 +900,55 @@ int main(int argc, char *argv[])
 
         rpcServer.start();
 
+        /* The stratum server lets a stock miner hash for this node directly.
+           Optional, and a failure to bind is not fatal: the node keeps running
+           without it rather than refusing to start over a busy port. */
+        std::unique_ptr<Daemon::StratumServer> stratumServer;
+
+        if (config.stratumBindPort != 0)
+        {
+            stratumServer = std::make_unique<Daemon::StratumServer>(
+                dispatcher,
+                *ccore,
+                *cprotocol,
+                logManager,
+                config.stratumBindIp,
+                config.stratumBindPort,
+                config.stratumShareDifficulty,
+                config.stratumMaxConnections);
+
+            if (!stratumServer->start())
+            {
+                logger(WARNING) << "Failed to start the stratum server. Continuing without it.";
+                stratumServer.reset();
+            }
+        }
+
+        /* Monero-style --block-notify / --reorg-notify / --tx-notify hooks.
+           Delivery runs on the notifier's own worker threads; the dispatcher
+           fiber that consumes Core's message stream only formats and enqueues,
+           so a slow webhook or a wedged child process cannot stall the node. */
+        std::unique_ptr<Daemon::ChainNotifier> chainNotifier;
+
+        if (!config.blockNotify.empty() || !config.reorgNotify.empty() || !config.txNotify.empty())
+        {
+            chainNotifier = std::make_unique<Daemon::ChainNotifier>(
+                dispatcher,
+                *ccore,
+                *cprotocol,
+                logManager,
+                config.blockNotify,
+                config.reorgNotify,
+                config.txNotify,
+                config.notifyDuringSync);
+
+            if (!chainNotifier->start())
+            {
+                logger(WARNING) << "No usable notification hook configured. Continuing without notifications.";
+                chainNotifier.reset();
+            }
+        }
+
         /* Get the RPC IP address and port we are bound to */
         auto [ip, port] = rpcServer.getConnectionInfo();
 
@@ -607,7 +960,22 @@ int main(int argc, char *argv[])
             ip = "127.0.0.1";
         }
 
-        DaemonCommandsHandler dch(*ccore, *p2psrv, cprotocol, logManager, ip, port, database, config);
+        auto pruneTrigger = std::make_shared<std::atomic<bool>>(false);
+        DaemonCommandsHandler dch(*ccore, *p2psrv, cprotocol, logManager, ip, port, database, config, pruneTrigger);
+
+        /* A console attached over the socket runs its commands through the same
+           handler as the local one. Set after the handler exists and cleared
+           before it goes away, so the RPC thread can never reach a dangling
+           reference. */
+        rpcServer.setConsoleExecutor([&dch](const std::string &commandLine)
+                                     { return dch.run_remote_command(commandLine); });
+
+        if (!rpcServer.getIpcPath().empty())
+        {
+            logger(INFO, BRIGHT_GREEN)
+                << "RPC is also on " << Common::Ipc::describe(rpcServer.getIpcPath()) << " (mode "
+                << Common::Ipc::formatMode(ipcMode) << "). Console: DeroGoldd --attach " << rpcServer.getIpcPath();
+        }
 
         if (!config.noConsole)
         {
@@ -630,9 +998,11 @@ int main(int argc, char *argv[])
             constexpr auto prunePassInterval = std::chrono::seconds(60);
             constexpr auto prunePollInterval = std::chrono::seconds(1);
 
-            pruneWorker = std::thread([&, prunePassInterval, prunePollInterval]
+            pruneWorker = std::thread([&, prunePassInterval, prunePollInterval, pruneTrigger]
                                       {
-                                          auto nextRun = std::chrono::steady_clock::now() + prunePassInterval;
+                                          // Start immediately on first run to catch up any blocks skipped
+                                          // by previous daemon runs where prune was enabled but non-functional.
+                                          auto nextRun = std::chrono::steady_clock::now();
                                           std::future<void> prunePassTask;
 
                                           while (!stopPruneWorker)
@@ -645,61 +1015,73 @@ int main(int argc, char *argv[])
                                                   continue;
                                               }
 
+                                              // Manual trigger from 'prune_status start' console command.
+                                              if (pruneTrigger->exchange(false))
+                                              {
+                                                  nextRun = std::chrono::steady_clock::now();
+                                              }
+
                                               if (std::chrono::steady_clock::now() < nextRun)
                                               {
                                                   std::this_thread::sleep_for(prunePollInterval);
                                                   continue;
                                               }
 
-                                              prunePassTask = std::async(std::launch::async,
-                                                                         [&, depth = config.pruneDepth]
-                                                                         {
-                                                                             logger(INFO)
-                                                                                 << "Starting periodic prune pass in "
-                                                                                    "background (depth "
-                                                                                 << depth << ").";
+                                              prunePassTask = std::async(
+                                                  std::launch::async,
+                                                  [&, depth = config.pruneDepth]
+                                                  {
+                                                      if (!config.prune)
+                                                      {
+                                                          return;
+                                                      }
 
-                                                                             uint32_t pruneFloor = 0;
-                                                                             try
-                                                                             {
-                                                                                 const uint64_t height =
-                                                                                     ccore->getTopBlockIndex() + 1;
-                                                                                 pruneFloor =
-                                                                                     height > depth
-                                                                                         ? static_cast<uint32_t>(
-                                                                                               height - depth)
-                                                                                         : 0;
-                                                                             }
-                                                                             catch (const std::exception &e)
-                                                                             {
-                                                                                 logger(WARNING)
-                                                                                     << "Prune pass: failed to get "
-                                                                                        "chain height: "
-                                                                                     << e.what();
-                                                                                 return;
-                                                                             }
+                                                      // Prune through the blockchain cache rather than writing
+                                                      // raw deletes here. That path preserves the genesis block,
+                                                      // batches the deletes, and — critically — persists the new
+                                                      // prune floor in the same atomic write. Deleting keys
+                                                      // directly left the stored floor stale, so the wallet sync
+                                                      // RPC, the pruned-block guard and prune_status all reported
+                                                      // a floor that no longer matched the database, and every
+                                                      // restart re-issued a tombstone for the whole pruned range.
+                                                      uint64_t pruneFloor = 0;
+                                                      uint32_t currentFloor = 0;
+                                                      try
+                                                      {
+                                                          const uint64_t height = ccore->getTopBlockIndex() + 1;
+                                                          pruneFloor = height > depth ? height - depth : 0;
+                                                          currentFloor = ccore->getPruneFloor();
+                                                      }
+                                                      catch (const std::exception &)
+                                                      {
+                                                          return;
+                                                      }
 
-                                                                             if (pruneFloor > 0)
-                                                                             {
-                                                                                 try
-                                                                                 {
-                                                                                     ccore->pruneRawBlocksBefore(
-                                                                                         pruneFloor);
-                                                                                 }
-                                                                                 catch (const std::exception &e)
-                                                                                 {
-                                                                                     logger(WARNING)
-                                                                                         << "Prune pass failed: "
-                                                                                         << e.what();
-                                                                                     return;
-                                                                                 }
-                                                                             }
+                                                      if (pruneFloor <= currentFloor)
+                                                      {
+                                                          return;
+                                                      }
 
-                                                                             logger(INFO)
-                                                                                 << "Periodic prune pass completed. "
-                                                                                    "Prune floor now at: "
-                                                                                 << pruneFloor;
-                                                                         });
+                                                      logger(INFO)
+                                                          << "Starting periodic prune pass (depth " << depth
+                                                          << ", pruning raw blocks [" << currentFloor
+                                                          << ", " << pruneFloor << ")).";
+
+                                                      try
+                                                      {
+                                                          ccore->pruneRawBlocksBefore(
+                                                              static_cast<uint32_t>(pruneFloor));
+                                                      }
+                                                      catch (const std::exception &e)
+                                                      {
+                                                          logger(WARNING) << "Prune pass failed: " << e.what();
+                                                          return;
+                                                      }
+
+                                                      logger(INFO)
+                                                          << "Periodic prune pass completed. Prune floor now at: "
+                                                          << pruneFloor << ".";
+                                                  });
 
                                               nextRun = std::chrono::steady_clock::now() + prunePassInterval;
                                           }
@@ -714,6 +1096,12 @@ int main(int argc, char *argv[])
         Tools::SignalHandler::install(
             [&dch]
             {
+                static std::atomic<bool> s_alreadyShuttingDown(false);
+                if (s_alreadyShuttingDown.exchange(true))
+                {
+                    // Second signal while shutdown is already in progress: force-exit immediately.
+                    std::_Exit(1);
+                }
                 dch.exit({});
                 dch.stop_handling();
             });
@@ -724,7 +1112,23 @@ int main(int argc, char *argv[])
 
         dch.stop_handling();
 
+        /* Before dch goes out of scope: the RPC threads are still running and
+           would otherwise hold a reference to it. */
+        rpcServer.setConsoleExecutor(nullptr);
+
         // stop components
+        if (stratumServer)
+        {
+            logger(INFO) << "Stopping stratum server...";
+            stratumServer->stop();
+        }
+
+        if (chainNotifier)
+        {
+            logger(INFO) << "Stopping chain notifier...";
+            chainNotifier->stop();
+        }
+
         logger(INFO) << "Stopping core rpc server...";
         rpcServer.stop();
 

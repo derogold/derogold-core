@@ -8,7 +8,17 @@
 #include "httplib.h"
 
 #include <cryptopp/modes.h>
+#include <shared_mutex>
 #include <walletbackend/WalletBackend.h>
+
+/* Whether a request only reads the open wallet, or replaces it. Reads share
+   the lock, so polling /status is not held up by a send waiting on the daemon;
+   the handlers that open, close or rebuild the wallet take it alone. */
+enum WalletAccess
+{
+    SharedAccess,
+    ExclusiveAccess,
+};
 
 enum WalletState
 {
@@ -56,7 +66,10 @@ class ApiDispatcher
         const std::string rpcBindIp,
         const std::string rpcPassword,
         std::string corsHeader,
-        unsigned int walletSyncThreads = std::thread::hardware_concurrency());
+        unsigned int walletSyncThreads = std::thread::hardware_concurrency(),
+        const std::string defaultDaemonHost = "127.0.0.1",
+        const uint16_t defaultDaemonPort = CryptoNote::RPC_DEFAULT_PORT,
+        const bool defaultDaemonSSL = false);
 
     /////////////////////////////
     /* Public member functions */
@@ -80,6 +93,7 @@ class ApiDispatcher
         httplib::Response &res,
         const WalletState walletState,
         const bool viewWalletsPermitted,
+        const WalletAccess access,
         std::function<std::tuple<Error, uint16_t>(
             const httplib::Request &req,
             httplib::Response &res,
@@ -297,7 +311,15 @@ class ApiDispatcher
 
     /* Need a mutex for some actions, mainly mutating actions, like opening
        wallets, sending transfers, etc */
-    mutable std::mutex m_mutex;
+    /* Guards m_walletBackend, held by middleware across the whole handler.
+       Every handler reaches for m_walletBackend without taking a lock of its
+       own, and closeWallet reassigns it - reading a shared_ptr while another
+       thread assigns it is a data race whatever the value is, and httplib
+       serves these on several threads at once, so a DELETE /wallet racing any
+       read was undefined behaviour and a plausible use after free. Holding it
+       around the handler also closes the gap between middleware checking that
+       a wallet is open and the handler using it. */
+    mutable std::shared_mutex m_mutex;
 
     /* The server host */
     std::string m_host;
@@ -314,4 +336,13 @@ class ApiDispatcher
 
     /* Amount of threads to use during wallet syncing */
     unsigned int m_walletSyncThreads;
+
+    /* Where to reach the daemon when a request does not name one. Set from
+       the command line, so an operator can point the whole service at a
+       socket once instead of every caller repeating it. */
+    std::string m_defaultDaemonHost;
+
+    uint16_t m_defaultDaemonPort;
+
+    bool m_defaultDaemonSSL;
 };

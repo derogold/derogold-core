@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <iostream>
 #include <logging/ILogger.h>
 #include <rapidjson/document.h>
 #include <rapidjson/istreamwrapper.h>
@@ -83,6 +84,10 @@ namespace DaemonConfig
              cxxopts::value<bool>(config.backgroundPrune)->default_value(config.backgroundPrune ? "true" : "false"))
             ("prune-depth", "When prune mode is enabled, retain at least this many recent blocks locally.",
              cxxopts::value<uint32_t>(config.pruneDepth), "<blocks>")
+            ("lite", "Lite-node mode: store full block data only from --lite-height upward. Permanent for this database, and cannot be combined with --prune or --daemon-mode explorer.",
+             cxxopts::value<bool>(config.lite))
+            ("lite-height", "Height at and above which a lite node stores full block data. Required with --lite.",
+             cxxopts::value<uint32_t>(config.liteHeight), "<height>")
             ("rewind-to-height", "Rewinds the local blockchain cache to the specified height.", cxxopts::value<uint32_t>(config.rewindToHeight), "<height>")
             ("sync-from-height", "Skip downloading blocks below <height> by bootstrapping from a trusted checkpoint state. "
              "Must be used on a fresh data directory (or combined with --resync). "
@@ -112,9 +117,26 @@ namespace DaemonConfig
 
         options.add_options("RPC")
             ("enable-cors", "Adds header 'Access-Control-Allow-Origin' to the RPC responses using the <domain>. Uses the value specified as the domain. Use * for all.", cxxopts::value<std::string>(config.enableCors), "<domain>")
-            ("enable-trtl-rpc", "Enable the turtlecoin RPC API", cxxopts::value<bool>(config.enableTrtlRpc))
             ("fee-address", "Sets the convenience charge <address> for light wallets that use the daemon", cxxopts::value<std::string>(config.feeAddress), "<address>")
-            ("fee-amount", "Sets the convenience charge amount for light wallets that use the daemon", cxxopts::value<int>(config.feeAmount));
+            ("fee-amount", "Sets the convenience charge amount for light wallets that use the daemon", cxxopts::value<int>(config.feeAmount))
+            ("rpc-ipc-path", "Also serve the RPC on a local socket at <path>, whose file permissions decide who may connect. POSIX only", cxxopts::value<std::string>(config.rpcIpcPath), "<path>")
+            ("rpc-ipc-mode", "Permissions for the RPC socket file, in octal. The default allows only the user running the daemon", cxxopts::value<std::string>(config.rpcIpcMode), "<octal>")
+            ("rpc-ipc-group", "Group to own the RPC socket file, so members of that group may connect", cxxopts::value<std::string>(config.rpcIpcGroup), "<group>");
+
+        options.add_options("Mining")
+            ("stratum-bind-ip", "Interface the built-in stratum server listens on. Loopback by default: the port has no authentication, so anyone who can reach it can mine to their own address using this node", cxxopts::value<std::string>(config.stratumBindIp), "<ip>")
+            ("stratum-bind-port", "Port for the built-in stratum server, so a miner can mine straight to this node. 0 disables it", cxxopts::value<uint16_t>(config.stratumBindPort), "#")
+            ("stratum-share-difficulty", "Difficulty stratum miners are given. 0 uses the network difficulty, so a miner only reports when it has found a block; a lower value makes it report progress as well", cxxopts::value<uint64_t>(config.stratumShareDifficulty), "#")
+            ("stratum-max-connections", "Miners allowed on the stratum port at once", cxxopts::value<size_t>(config.stratumMaxConnections), "#");
+
+        options.add_options("Console")
+            ("attach", "Attach an interactive console to a daemon already running, over its RPC socket at <path>, instead of starting a node", cxxopts::value<std::string>(config.attachSocket), "<path>");
+
+        options.add_options("Notifications")
+            ("block-notify", "Run a command or POST to an http(s):// URL for each new main-chain block. Command placeholders: %s block hash, %h height (no shell; quotes group arguments)", cxxopts::value<std::string>(config.blockNotify), "<cmd|url>")
+            ("reorg-notify", "Run a command or POST to an http(s):// URL on every chain reorganisation. Placeholders: %s split height, %h new height, %n new blocks, %d discarded blocks", cxxopts::value<std::string>(config.reorgNotify), "<cmd|url>")
+            ("tx-notify", "Run a command or POST to an http(s):// URL for each transaction entering the pool. Placeholders: %s transaction hash", cxxopts::value<std::string>(config.txNotify), "<cmd|url>")
+            ("notify-during-sync", "Also fire the *-notify hooks while the node is still synchronizing (default: suppressed)", cxxopts::value<bool>(config.notifyDuringSync));
 
         options.add_options("Network")
             ("allow-local-ip", "Allow the local IP to be added to the peer list", cxxopts::value<bool>(config.localIp))
@@ -123,6 +145,11 @@ namespace DaemonConfig
             ("p2p-bind-port", "TCP port for the P2P service", cxxopts::value<int>(config.p2pPort), "#")
             ("p2p-external-port", "External TCP port for the P2P service (NAT port forward)", cxxopts::value<int>(config.p2pExternalPort), "#")
             ("p2p-reset-peerstate", "Generate a new peer ID and remove known peers saved previously", cxxopts::value<bool>(config.p2pResetPeerstate))
+            ("out-peers", "Maximum number of outgoing P2P connections to maintain", cxxopts::value<uint32_t>(config.outPeers), "#")
+            ("in-peers", "Maximum number of incoming P2P connections to accept. 0 makes this node outbound only", cxxopts::value<uint32_t>(config.inPeers), "#")
+            ("sync-batch-min", "Smallest number of blocks to request from a peer at once", cxxopts::value<uint32_t>(config.syncBatchMin), "#")
+            ("sync-batch-max", "Largest number of blocks to request from a peer at once", cxxopts::value<uint32_t>(config.syncBatchMax), "#")
+            ("block-sync-bytes", "Approximate ceiling on the bytes one block request may pull back", cxxopts::value<uint64_t>(config.blockSyncBytes), "<bytes>")
             ("rpc-bind-ip", "Interface IP address for the RPC service", cxxopts::value<std::string>(config.rpcInterface), "<ip>")
             ("rpc-bind-port", "TCP port for the RPC service", cxxopts::value<int>(config.rpcPort), "#");
 
@@ -130,7 +157,7 @@ namespace DaemonConfig
             ("add-exclusive-node", "Manually add a peer to the local peer list ONLY attempt connections to it. [ip:port]", cxxopts::value<std::vector<std::string>>(config.exclusiveNodes), "<ip:port>")
             ("add-peer", "Manually add a peer to the local peer list", cxxopts::value<std::vector<std::string>>(config.peers), "<ip:port>")
             ("add-priority-node", "Manually add a peer to the local peer list and attempt to maintain a connection to it [ip:port]", cxxopts::value<std::vector<std::string>>(config.priorityNodes), "<ip:port>")
-            ("seed-node", "Connect to a node to retrieve the peer list and then disconnect", cxxopts::value<std::vector<std::string>>(config.seedNodes), "<ip:port>");
+            ("seed-node", "Connect to a node to retrieve the peer list and then disconnect", cxxopts::value<std::vector<std::string>>(config.seedNodes), "<host:port>");
 
         const std::string maxOpenFiles =
             "(default: " + std::to_string(CryptoNote::ROCKSDB_MAX_OPEN_FILES) + ")";
@@ -297,11 +324,6 @@ namespace DaemonConfig
             config.enableCors = j["enable-cors"].GetString();
         }
 
-        if (j.HasMember("enable-trtl-api"))
-        {
-            config.enableTrtlRpc = j["enable-trtl-api"].GetBool();
-        }
-
         if (j.HasMember("fee-address"))
         {
             config.feeAddress = j["fee-address"].GetString();
@@ -323,6 +345,100 @@ namespace DaemonConfig
         else if (j.HasMember("enable-blockexplorer") && j["enable-blockexplorer"].GetBool())
         {
             config.daemonMode = DaemonConfiguration::DAEMON_MODE_EXPLORER;
+        }
+
+        // Mining Options
+
+        if (j.HasMember("stratum-bind-ip"))
+        {
+            config.stratumBindIp = j["stratum-bind-ip"].GetString();
+        }
+
+        if (j.HasMember("stratum-bind-port"))
+        {
+            config.stratumBindPort = static_cast<uint16_t>(j["stratum-bind-port"].GetUint());
+        }
+
+        if (j.HasMember("stratum-share-difficulty"))
+        {
+            config.stratumShareDifficulty = j["stratum-share-difficulty"].GetUint64();
+        }
+
+        if (j.HasMember("stratum-max-connections"))
+        {
+            config.stratumMaxConnections = j["stratum-max-connections"].GetUint64();
+        }
+
+        if (j.HasMember("lite"))
+        {
+            config.lite = j["lite"].GetBool();
+        }
+
+        if (j.HasMember("lite-height"))
+        {
+            config.liteHeight = j["lite-height"].GetUint();
+        }
+
+        if (j.HasMember("sync-batch-min"))
+        {
+            config.syncBatchMin = j["sync-batch-min"].GetUint();
+        }
+
+        if (j.HasMember("sync-batch-max"))
+        {
+            config.syncBatchMax = j["sync-batch-max"].GetUint();
+        }
+
+        if (j.HasMember("block-sync-bytes"))
+        {
+            config.blockSyncBytes = j["block-sync-bytes"].GetUint64();
+        }
+
+        if (j.HasMember("out-peers"))
+        {
+            config.outPeers = j["out-peers"].GetUint();
+        }
+
+        if (j.HasMember("in-peers"))
+        {
+            config.inPeers = j["in-peers"].GetUint();
+        }
+
+        if (j.HasMember("rpc-ipc-path"))
+        {
+            config.rpcIpcPath = j["rpc-ipc-path"].GetString();
+        }
+
+        if (j.HasMember("rpc-ipc-mode"))
+        {
+            config.rpcIpcMode = j["rpc-ipc-mode"].GetString();
+        }
+
+        if (j.HasMember("rpc-ipc-group"))
+        {
+            config.rpcIpcGroup = j["rpc-ipc-group"].GetString();
+        }
+
+        // Notification Options
+
+        if (j.HasMember("block-notify"))
+        {
+            config.blockNotify = j["block-notify"].GetString();
+        }
+
+        if (j.HasMember("reorg-notify"))
+        {
+            config.reorgNotify = j["reorg-notify"].GetString();
+        }
+
+        if (j.HasMember("tx-notify"))
+        {
+            config.txNotify = j["tx-notify"].GetString();
+        }
+
+        if (j.HasMember("notify-during-sync"))
+        {
+            config.notifyDuringSync = j["notify-during-sync"].GetBool();
         }
 
         // Network Options
@@ -483,9 +599,32 @@ namespace DaemonConfig
 
         j.AddMember("daemon-mode", config.daemonMode, alloc);
         j.AddMember("enable-cors", config.enableCors, alloc);
-        j.AddMember("enable-trtl-api", config.enableTrtlRpc, alloc);
         j.AddMember("fee-address", config.feeAddress, alloc);
         j.AddMember("fee-amount", config.feeAmount, alloc);
+
+        j.AddMember("lite", config.lite, alloc);
+        j.AddMember("lite-height", config.liteHeight, alloc);
+
+        j.AddMember("sync-batch-min", config.syncBatchMin, alloc);
+        j.AddMember("sync-batch-max", config.syncBatchMax, alloc);
+        j.AddMember("block-sync-bytes", config.blockSyncBytes, alloc);
+
+        j.AddMember("out-peers", config.outPeers, alloc);
+        j.AddMember("in-peers", config.inPeers, alloc);
+
+        j.AddMember("stratum-bind-ip", config.stratumBindIp, alloc);
+        j.AddMember("stratum-bind-port", config.stratumBindPort, alloc);
+        j.AddMember("stratum-share-difficulty", config.stratumShareDifficulty, alloc);
+        j.AddMember("stratum-max-connections", static_cast<uint64_t>(config.stratumMaxConnections), alloc);
+
+        j.AddMember("rpc-ipc-path", config.rpcIpcPath, alloc);
+        j.AddMember("rpc-ipc-mode", config.rpcIpcMode, alloc);
+        j.AddMember("rpc-ipc-group", config.rpcIpcGroup, alloc);
+
+        j.AddMember("block-notify", config.blockNotify, alloc);
+        j.AddMember("reorg-notify", config.reorgNotify, alloc);
+        j.AddMember("tx-notify", config.txNotify, alloc);
+        j.AddMember("notify-during-sync", config.notifyDuringSync, alloc);
 
         j.AddMember("allow-local-ip", config.localIp, alloc);
         j.AddMember("hide-my-port", config.hideMyPort, alloc);

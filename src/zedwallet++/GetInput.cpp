@@ -11,6 +11,7 @@
 
 #include "linenoise.hpp"
 
+#include <common/IpcSocket.h>
 #include <config/WalletConfig.h>
 #include <errors/ValidateParameters.h>
 #include <utilities/ColouredMsg.h>
@@ -296,6 +297,7 @@ std::tuple<std::string, uint16_t, bool> getDaemonAddress()
     while (true)
     {
         std::cout << InformationMsg("\nEnter the daemon address you want to use.\n"
+                                    "A host, or the path of a daemon's IPC socket.\n"
                                     "You can omit the port, and it will default to ")
                   << InformationMsg(CryptoNote::RPC_DEFAULT_PORT) << ".\n\nHit enter for the default of localhost: ";
 
@@ -318,6 +320,12 @@ std::tuple<std::string, uint16_t, bool> getDaemonAddress()
         if (!Utilities::parseDaemonAddressFromString(host, port, address))
         {
             std::cout << WarningMsg("\nInvalid daemon address! Try again.\n");
+            continue;
+        }
+
+        if (std::string error; !Common::Ipc::validateClientAddress(host, error))
+        {
+            std::cout << WarningMsg("\nCannot use " + host + ": " + error + "\n");
             continue;
         }
 

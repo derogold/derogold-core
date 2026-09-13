@@ -1379,28 +1379,28 @@ namespace CryptoNote
 
     uint64_t WalletGreen::scanHeightToTimestamp(const uint64_t scanHeight)
     {
-        if (scanHeight == 0)
+        /* This used to charge DIFFICULTY_TARGET for every block, which is the
+           ten seconds the chain launched at rather than the three hundred it
+           has spent per block since DIFFICULTY_TARGET_V3_HEIGHT. Asking to
+           scan from height 2,900,000 named a timestamp in 2019, so the service
+           rescanned seven years to reach a wallet made yesterday.
+
+           Utilities::scanHeightToTimestamp walks the eras at their own block
+           times. Deferring to it leaves one implementation to be right. */
+        const uint64_t timestamp = Utilities::scanHeightToTimestamp(scanHeight);
+
+        if (timestamp <= CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP)
         {
-            return 0;
+            return timestamp;
         }
 
-        /* Get the amount of seconds since the blockchain launched */
-        uint64_t secondsSinceLaunch = scanHeight * CryptoNote::parameters::DIFFICULTY_TARGET;
+        /* Keep the buffer this has always carried, in case blocks came out
+           faster than they were meant to and the height is really older than
+           its target rate says. */
+        const uint64_t secondsSinceLaunch = timestamp - CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP;
 
-        /* Add a bit of a buffer in case of difficulty weirdness, blocks coming
-       out too fast */
-        secondsSinceLaunch *= 0.95;
-
-        /* Get the genesis block timestamp and add the time since launch */
-        const uint64_t timestamp = CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP + secondsSinceLaunch;
-
-        /* Timestamp in the future */
-        if (timestamp >= static_cast<uint64_t>(std::time(nullptr)))
-        {
-            return getCurrentTimestampAdjusted();
-        }
-
-        return timestamp;
+        return CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP
+               + static_cast<uint64_t>(secondsSinceLaunch * 0.95);
     }
 
     uint64_t WalletGreen::getCurrentTimestampAdjusted()

@@ -102,7 +102,6 @@ function generateWindowsConfigurationPreset(compiler: CMakeCompiler, target?: CM
     result.inherits = [`default-${compiler}`];
     result.installDir = "${sourceDir}/build";
     result.cacheVariables = {
-        VCPKG_TARGET_TRIPLET: "x64-windows-static",
         ARCH: "native",
         SET_PACKAGE_OUTPUT_SUFFIX: "windows-x64-msvc"
     };
@@ -117,7 +116,6 @@ function generateWindowsConfigurationPreset(compiler: CMakeCompiler, target?: CM
         }
     } else {
         result.name = `windows-x64-mingw-${compiler}`;
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = "x64-mingw-static";
         result.cacheVariables.SET_PACKAGE_OUTPUT_SUFFIX = `windows-x64-mingw-${compiler}`;
     }
 
@@ -127,8 +125,6 @@ function generateWindowsConfigurationPreset(compiler: CMakeCompiler, target?: CM
         if (compiler === "gcc" || compiler === "clang") {
             result.inherits[0] = `${result.inherits[0]}-release`;
         }
-
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = `${result.cacheVariables.VCPKG_TARGET_TRIPLET}-release`;
     }
 
     if (target === "package") {
@@ -190,13 +186,11 @@ function generateLinuxConfigurationPreset(compiler: CMakeCompiler, arch: "x64" |
     
     result.inherits = [`default-${compiler}`];
     result.cacheVariables = {
-        VCPKG_TARGET_TRIPLET: `${arch}-linux`,
         ARCH: "native",
         SET_PACKAGE_OUTPUT_SUFFIX: `linux-${arch}-${compiler}`
     };
 
     if (arch === "amd64") {
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = `x64-linux`;
     }
 
     if (compiler === "gcc-cross" || compiler === "clang-cross") {
@@ -206,10 +200,10 @@ function generateLinuxConfigurationPreset(compiler: CMakeCompiler, arch: "x64" |
                 CC: "aarch64-linux-gnu-gcc",
                 CXX: "aarch64-linux-gnu-g++"
             };
-            result.cacheVariables.VCPKG_CHAINLOAD_TOOLCHAIN_FILE = `\${sourceDir}/CMake/linux-${arch}-gcc.cmake`;
+            result.cacheVariables.CMAKE_TOOLCHAIN_FILE = `\${sourceDir}/CMake/linux-${arch}-gcc.cmake`;
         } else {
             result.inherits[0] = "default-clang";
-            result.cacheVariables.VCPKG_CHAINLOAD_TOOLCHAIN_FILE = `\${sourceDir}/CMake/linux-${arch}-clang.cmake`;
+            result.cacheVariables.CMAKE_TOOLCHAIN_FILE = `\${sourceDir}/CMake/linux-${arch}-clang.cmake`;
         }
 
         result.cacheVariables.ARCH = "default";
@@ -218,7 +212,6 @@ function generateLinuxConfigurationPreset(compiler: CMakeCompiler, arch: "x64" |
     if (target !== undefined) {
         result.name = `${result.name}-${target}`;
         result.inherits[0] = `${result.inherits[0]}-release`;
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = `${result.cacheVariables.VCPKG_TARGET_TRIPLET}-release`;
     }
 
     if (target === "package") {
@@ -227,7 +220,6 @@ function generateLinuxConfigurationPreset(compiler: CMakeCompiler, arch: "x64" |
     }
 
     if (compiler === "clang" || compiler === "clang-cross") {
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = `${result.cacheVariables.VCPKG_TARGET_TRIPLET}-clang`;
     }
 
     return result;
@@ -255,7 +247,6 @@ function generateMacOSConfigurationPreset(compiler: CMakeCompiler, arch: "x64", 
         CPPFLAGS: "-I/usr/local/opt/llvm/include"
     }
     result.cacheVariables = {
-        VCPKG_TARGET_TRIPLET: `${arch}-osx`,
         ARCH: "native",
         SET_PACKAGE_OUTPUT_SUFFIX: `osx-${arch}-${compiler}`
     }
@@ -263,7 +254,6 @@ function generateMacOSConfigurationPreset(compiler: CMakeCompiler, arch: "x64", 
     if (target !== undefined) {
         result.name = `${result.name}-${target}`;
         result.inherits[0] = `${result.inherits[0]}-release`;
-        result.cacheVariables.VCPKG_TARGET_TRIPLET = `${result.cacheVariables.VCPKG_TARGET_TRIPLET}-release`;
     }
 
     if (target === "package") {

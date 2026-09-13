@@ -101,7 +101,8 @@ namespace CryptoNote
             const uint64_t blockCount,
             const bool skipEmptyBlocks,
             std::vector<WalletTypes::WalletBlockInfo> &blocks,
-            std::optional<WalletTypes::TopBlock> &topBlockInfo) const = 0;
+            std::optional<WalletTypes::TopBlock> &topBlockInfo,
+            uint64_t &resolvedStartIndex) const = 0;
 
         virtual bool getRawBlocks(
             const std::vector<Crypto::Hash> &knownBlockHashes,
@@ -110,7 +111,21 @@ namespace CryptoNote
             const uint64_t blockCount,
             const bool skipCoinbaseTransactions,
             std::vector<RawBlock> &walletBlocks,
-            std::optional<WalletTypes::TopBlock> &topBlockInfo) const = 0;
+            std::optional<WalletTypes::TopBlock> &topBlockInfo,
+            uint64_t &resolvedStartIndex) const = 0;
+
+        /* Returns wallet-sync-compatible blocks for the pruned height range [startHeight, endHeight).
+           Uses cached block metadata and stored transaction public keys so results survive raw-block
+           deletion.  Returns an empty vector when the range is not pruned or on error. */
+        virtual std::vector<WalletTypes::WalletBlockInfo> getPrunedWalletBlocks(
+            uint64_t startHeight,
+            uint64_t endHeight,
+            bool skipCoinbaseTransactions) const = 0;
+
+        /* Returns the lowest block height >= fromHeight that has raw block data
+           in the DB.  Returns getTopBlockIndex()+1 if no raw blocks exist at or
+           above fromHeight (i.e. the entire range is pruned). */
+        virtual uint64_t getMinRawBlockHeight(uint64_t fromHeight) const = 0;
 
         virtual bool getTransactionsStatus(
             std::unordered_set<Crypto::Hash> transactionHashes,

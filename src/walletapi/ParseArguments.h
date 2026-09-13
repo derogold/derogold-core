@@ -34,6 +34,14 @@ struct ApiConfig
     bool noConsole = false;
 
     unsigned int threads;
+
+    /* Where to reach the daemon, for requests that do not name one
+       themselves. A hostname, an IP, or the path of a daemon's IPC socket. */
+    std::string daemonHost = "127.0.0.1";
+
+    uint16_t daemonPort = CryptoNote::RPC_DEFAULT_PORT;
+
+    bool daemonSSL = false;
 };
 
 ApiConfig parseArguments(int argc, char **argv);

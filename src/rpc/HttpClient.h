@@ -11,6 +11,7 @@
 #include <http/HttpRequest.h>
 #include <http/HttpResponse.h>
 #include <memory>
+#include <streambuf>
 #include <system/TcpConnection.h>
 #include <system/TcpStream.h>
 #include <version.h>
@@ -45,11 +46,19 @@ namespace CryptoNote
 
         bool m_connected = false;
 
+        /* True when m_address named a daemon's local socket rather than a
+           host, in which case m_connection is unused and the buffer below owns
+           the descriptor instead. */
+        bool m_ipc = false;
+
         System::Dispatcher &m_dispatcher;
 
         System::TcpConnection m_connection;
 
-        std::unique_ptr<System::TcpStreambuf> m_streamBuf;
+        /* A TcpStreambuf over m_connection, or a socket one from Common::Ipc.
+           Held by the base type because the HTTP parsing above only ever wants
+           a stream. */
+        std::unique_ptr<std::streambuf> m_streamBuf;
 
         /* Don't send two requests at once */
         std::mutex m_mutex;

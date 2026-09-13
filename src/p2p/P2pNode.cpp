@@ -15,7 +15,6 @@
 #include "serialization/BinaryInputStreamSerializer.h"
 #include "serialization/BinaryOutputStreamSerializer.h"
 
-#include <boost/uuid/uuid_io.hpp>
 #include <config/CryptoNoteConfig.h>
 #include <crypto/random.h>
 #include <random>

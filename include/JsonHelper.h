@@ -50,6 +50,21 @@ template<typename T> uint64_t getUint64FromJSON(const T &j, const std::string &k
     return val.GetUint64();
 }
 
+/**
+ * Gets a uint64 from the JSON, without a key. For example, we might have an
+ * array of numbers.
+ */
+template<typename T> uint64_t getUint64FromJSONString(const T &j)
+{
+    if (!j.IsUint64())
+    {
+        throw std::invalid_argument(
+            "JSON parameter is wrong type. Expected uint64_t, got " + kTypeNames[j.GetType()]);
+    }
+
+    return j.GetUint64();
+}
+
 template<typename T> uint64_t getInt64FromJSON(const T &j, const std::string &key)
 {
     auto &val = getJsonValue(j, key);

@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 
-ARG UBUNTU_VERSION=20.04
+# 22.04 rather than 20.04, because this image is the published container and
+# its runtime base should be current. 20.04 does build, but only with gcc-11
+# from ppa:ubuntu-toolchain-r/test, since the bundled RocksDB needs C++20's
+# `using enum` and 20.04's own newest is gcc-10. That is what
+# Dockerfile.portable does, to reach an older glibc.
+ARG UBUNTU_VERSION=22.04
 ARG CCACHE_VERSION=4.10.2
-
-ARG VCPKG_BINARY_SOURCES=clear;default,readwrite
-ARG ACTIONS_CACHE_URL
 
 ##################################################
 # Default Build Environment
@@ -21,13 +23,13 @@ ARG TARGETARCH
 ARG UBUNTU_VERSION
 ARG CCACHE_VERSION
 
-ARG VCPKG_BINARY_SOURCES
-ARG ACTIONS_CACHE_URL
-
 ARG CMAKE_APT_PACKAGE="ca-certificates curl gpg"
 ARG VCS_PACKAGE="git gpg"
 ARG DEV_PACKAGE="cmake ninja-build"
-ARG VCPKG_PACKAGE="curl zip unzip tar pkg-config"
+# Nothing is downloaded during the build; these are for the CMake apt key
+# fetch above and for pkg-config lookups.
+ARG FETCH_PACKAGE="curl ca-certificates pkg-config"
+ARG LIB_PACKAGE="libssl-dev"
 
 ARG AMD64_GCC_PACKAGE="build-essential crossbuild-essential-arm64"
 ARG ARM64_GCC_PACKAGE="build-essential crossbuild-essential-amd64"
@@ -39,9 +41,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     [ -s /etc/os-release ] && . /etc/os-release && \
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${UBUNTU_CODENAME} main" > /etc/apt/sources.list.d/kitware.list && \
     if [ "${BUILDPLATFORM}" = "linux/amd64" ]; then \
-        apt-get update && apt-get install --no-install-recommends --no-install-suggests -y ${VCS_PACKAGE} ${DEV_PACKAGE} ${VCPKG_PACKAGE} ${AMD64_GCC_PACKAGE}; \
+        apt-get update && apt-get install --no-install-recommends --no-install-suggests -y ${VCS_PACKAGE} ${DEV_PACKAGE} ${FETCH_PACKAGE} ${LIB_PACKAGE} ${AMD64_GCC_PACKAGE}; \
     elif [ "${BUILDPLATFORM}" = "linux/arm64" ]; then \
-        apt-get update && apt-get install --no-install-recommends --no-install-suggests -y ${VCS_PACKAGE} ${DEV_PACKAGE} ${VCPKG_PACKAGE} ${ARM64_GCC_PACKAGE}; \
+        apt-get update && apt-get install --no-install-recommends --no-install-suggests -y ${VCS_PACKAGE} ${DEV_PACKAGE} ${FETCH_PACKAGE} ${LIB_PACKAGE} ${ARM64_GCC_PACKAGE}; \
     fi
 
 RUN git clone --branch v${CCACHE_VERSION} --depth 1 --recursive https://github.com/ccache/ccache.git /usr/local/src/ccache && \
@@ -57,12 +59,7 @@ FROM dev_env_default AS build
 
 RUN --mount=type=bind,target=/usr/local/src/DeroGold,rw \
     --mount=type=cache,id=ccache_${TARGETOS}_${TARGETARCH},target=/root/.ccache \
-    --mount=type=cache,id=vcpkg_${TARGETOS}_${TARGETARCH},target=/root/.cache/vcpkg/archives \
-    --mount=type=secret,id=ACTIONS_RUNTIME_TOKEN \
     cd /usr/local/src/DeroGold && \
-    if [ -s /run/secrets/ACTIONS_RUNTIME_TOKEN ]; then \
-        export ACTIONS_RUNTIME_TOKEN=$(cat /run/secrets/ACTIONS_RUNTIME_TOKEN); \
-    fi && \
     if [ "${BUILDPLATFORM}" != "${TARGETPLATFORM}" ]; then \
         cmake --preset linux-${TARGETARCH}-gcc-cross-all -D CMAKE_INSTALL_PREFIX=/usr/local && cmake --build --preset linux-${TARGETARCH}-gcc-cross-all -t install -j $(nproc); \
     else \

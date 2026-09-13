@@ -8,7 +8,6 @@
 #include "BlockchainUtils.h"
 #include "crypto/hash.h"
 
-#include <boost/iterator/iterator_facade.hpp>
 #include <common/CryptoNoteTools.h>
 #include <common/StringTools.h>
 #include <common/ShuffleGenerator.h>
@@ -18,6 +17,10 @@
 #include <cryptonotecore/DatabaseBlockchainCache.h>
 #include <cstdlib>
 #include <ctime>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
 
 namespace CryptoNote
 {
@@ -208,10 +211,10 @@ namespace CryptoNote
             return static_cast<uint64_t>((timestamp / ONE_DAY_SECONDS) * ONE_DAY_SECONDS);
         }
 
-        std::pair<boost::optional<uint32_t>, bool> requestClosestBlockIndexByTimestamp(uint64_t timestamp,
+        std::pair<std::optional<uint32_t>, bool> requestClosestBlockIndexByTimestamp(uint64_t timestamp,
                                                                                        IDataBase &database)
         {
-            std::pair<boost::optional<uint32_t>, bool> result = {{}, false};
+            std::pair<std::optional<uint32_t>, bool> result = {{}, false};
 
             BlockchainReadBatch readBatch;
             readBatch.requestClosestTimestampBlockIndex(timestamp);
@@ -342,12 +345,19 @@ namespace CryptoNote
             }
         }
 
-        class DbOutputConstIterator :
-            public boost::iterator_facade<DbOutputConstIterator,
-                                          const PackedOutIndex,
-                                          boost::random_access_traversal_tag /*boost::forward_traversal_tag*/>
+        /* A random access iterator over the key outputs for one amount, each
+           read from the database on dereference. Written out by hand in place
+           of boost::iterator_facade; std::lower_bound and std::distance below
+           are the only things that consume it. */
+        class DbOutputConstIterator
         {
         public:
+            using iterator_category = std::random_access_iterator_tag;
+            using value_type = PackedOutIndex;
+            using difference_type = std::ptrdiff_t;
+            using pointer = const PackedOutIndex *;
+            using reference = const PackedOutIndex &;
+
             DbOutputConstIterator(
                 std::function<PackedOutIndex(IBlockchainCache::Amount amount, uint32_t globalOutputIndex)> retriever_,
                 IBlockchainCache::Amount amount_,
@@ -358,37 +368,109 @@ namespace CryptoNote
             {
             }
 
-            const PackedOutIndex &dereference() const
+            reference operator*() const
             {
                 cachedValue = retriever(amount, globalOutputIndex);
                 return cachedValue;
             }
 
-            bool equal(const DbOutputConstIterator &other) const
+            pointer operator->() const
             {
-                return globalOutputIndex == other.globalOutputIndex;
+                return &**this;
             }
 
-            void increment()
+            reference operator[](difference_type n) const
+            {
+                return *(*this + n);
+            }
+
+            DbOutputConstIterator &operator++()
             {
                 ++globalOutputIndex;
+                return *this;
             }
 
-            void decrement()
+            DbOutputConstIterator operator++(int)
+            {
+                DbOutputConstIterator before = *this;
+                ++*this;
+                return before;
+            }
+
+            DbOutputConstIterator &operator--()
             {
                 --globalOutputIndex;
+                return *this;
             }
 
-            void advance(difference_type n)
+            DbOutputConstIterator operator--(int)
+            {
+                DbOutputConstIterator before = *this;
+                --*this;
+                return before;
+            }
+
+            DbOutputConstIterator &operator+=(difference_type n)
             {
                 assert(n >= -static_cast<difference_type>(globalOutputIndex));
                 globalOutputIndex += static_cast<uint32_t>(n);
+                return *this;
             }
 
-            difference_type distance_to(const DbOutputConstIterator &to) const
+            DbOutputConstIterator &operator-=(difference_type n)
             {
-                return static_cast<difference_type>(to.globalOutputIndex)
-                     - static_cast<difference_type>(globalOutputIndex);
+                return *this += -n;
+            }
+
+            friend DbOutputConstIterator operator+(DbOutputConstIterator it, difference_type n)
+            {
+                return it += n;
+            }
+
+            friend DbOutputConstIterator operator+(difference_type n, DbOutputConstIterator it)
+            {
+                return it += n;
+            }
+
+            friend DbOutputConstIterator operator-(DbOutputConstIterator it, difference_type n)
+            {
+                return it -= n;
+            }
+
+            friend difference_type operator-(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return static_cast<difference_type>(a.globalOutputIndex)
+                     - static_cast<difference_type>(b.globalOutputIndex);
+            }
+
+            friend bool operator==(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return a.globalOutputIndex == b.globalOutputIndex;
+            }
+
+            friend bool operator!=(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return !(a == b);
+            }
+
+            friend bool operator<(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return a.globalOutputIndex < b.globalOutputIndex;
+            }
+
+            friend bool operator>(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return b < a;
+            }
+
+            friend bool operator<=(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return !(b < a);
+            }
+
+            friend bool operator>=(const DbOutputConstIterator &a, const DbOutputConstIterator &b)
+            {
+                return !(a < b);
             }
 
         private:
@@ -501,13 +583,13 @@ namespace CryptoNote
                 version = static_cast<uint32_t>(std::atoi(values[0].c_str()));
             }
 
-            boost::optional<uint32_t> getDbSchemeVersion()
+            std::optional<uint32_t> getDbSchemeVersion()
             {
                 return version;
             }
 
         private:
-            boost::optional<uint32_t> version;
+            std::optional<uint32_t> version;
         };
 
         class DatabaseVersionWriteBatch : public IWriteBatch
@@ -545,11 +627,13 @@ namespace CryptoNote
     DatabaseBlockchainCache::DatabaseBlockchainCache(const Currency &curr,
                                                      IDataBase &dataBase,
                                                      IBlockchainCacheFactory &blockchainCacheFactory,
-                                                     std::shared_ptr<Logging::ILogger> _logger) :
+                                                     std::shared_ptr<Logging::ILogger> _logger,
+                                                     const uint32_t liteHeight) :
         currency(curr),
         database(dataBase),
         blockchainCacheFactory(blockchainCacheFactory),
-        logger(std::move(_logger), "DatabaseBlockchainCache")
+        logger(std::move(_logger), "DatabaseBlockchainCache"),
+        liteHeight(liteHeight)
     {
         DatabaseVersionReadBatch readBatch;
         auto ec = database.read(readBatch);
@@ -664,6 +748,21 @@ namespace CryptoNote
     std::unique_ptr<IBlockchainCache> DatabaseBlockchainCache::split(uint32_t splitBlockIndex)
     {
         assert(splitBlockIndex <= getTopBlockIndex());
+
+        /* Splitting means undoing blocks, which needs the transaction records
+           and the block-index-to-key-image lists that index-only heights never
+           stored. The lite height sits far enough below the top that no honest
+           reorg reaches here, so this is a corrupt or hostile chain rather than
+           something to attempt and half finish. */
+        if (isLiteIndexOnlyHeight(splitBlockIndex))
+        {
+            logger(Logging::ERROR) << "Refusing to split at index " << splitBlockIndex
+                                   << ", below this lite node's full block height " << liteHeight
+                                   << ". The data needed to undo those blocks was never stored.";
+
+            throw std::runtime_error("Cannot split below the lite node height");
+        }
+
         logger(Logging::DEBUGGING) << "split at index " << splitBlockIndex
                                    << " started, top block index: " << getTopBlockIndex();
 
@@ -734,9 +833,9 @@ namespace CryptoNote
         logger(Logging::TRACE) << "Delete successfull";
 
         // invalidate top block index and hash
-        topBlockIndex = boost::none;
-        topBlockHash = boost::none;
-        transactionsCount = boost::none;
+        topBlockIndex = std::nullopt;
+        topBlockHash = std::nullopt;
+        transactionsCount = std::nullopt;
 
         logger(Logging::DEBUGGING) << "split completed";
         // return new cache
@@ -745,6 +844,19 @@ namespace CryptoNote
 
     void DatabaseBlockchainCache::rewind(const uint64_t height)
     {
+        /* Same reasoning as split(): the blocks below the lite height cannot be
+           undone, because what undoing them needs was never written. Checked
+           before the height <= 1 shortcut, so a lite node cannot quietly wipe
+           itself back to genesis either. */
+        if (isLiteIndexOnlyHeight(static_cast<uint32_t>(height)))
+        {
+            logger(Logging::ERROR) << "Refusing to rewind to " << height
+                                   << ", below this lite node's full block height " << liteHeight
+                                   << ". The data needed to undo those blocks was never stored.";
+
+            throw std::runtime_error("Cannot rewind below the lite node height");
+        }
+
         /* 0 height, much much faster to just remove DB and recreate it than
          * remove everything. */
         if (height <= 1)
@@ -873,9 +985,9 @@ namespace CryptoNote
         logger(Logging::TRACE) << "Delete successful";
 
         // invalidate top block index and hash
-        topBlockIndex = boost::none;
-        topBlockHash = boost::none;
-        transactionsCount = boost::none;
+        topBlockIndex = std::nullopt;
+        topBlockHash = std::nullopt;
+        transactionsCount = std::nullopt;
     }
 
     // returns hash of pushed block
@@ -1065,10 +1177,19 @@ namespace CryptoNote
     void DatabaseBlockchainCache::pushTransaction(const CachedTransaction &cachedTransaction,
                                                   uint32_t blockIndex,
                                                   uint16_t transactionBlockIndex,
-                                                  BlockchainWriteBatch &batch)
+                                                  BlockchainWriteBatch &batch,
+                                                  WalletTypes::RawTransaction *walletTxOut)
     {
         logger(Logging::DEBUGGING) << "push transaction with hash " << cachedTransaction.getTransactionHash();
         const auto &tx = cachedTransaction.getTransaction();
+
+        /* Below a lite node's lite height the transaction record, the payment ID
+           index and the transaction public key index are never written, and the
+           per-output transaction hash is zeroed. Everything consensus needs from
+           this transaction still goes into the batch: the key output info, the
+           per-amount global indexes and the amount list, which are what ring
+           member resolution and decoy selection read. See LITENODE.md. */
+        const bool indexOnly = isLiteIndexOnlyHeight(blockIndex);
 
         ExtendedTransactionInfo transactionCacheInfo;
         transactionCacheInfo.blockIndex = blockIndex;
@@ -1094,7 +1215,7 @@ namespace CryptoNote
             poi.transactionIndex = transactionBlockIndex;
             poi.outputIndex = outputCount++;
 
-            if (output.target.type() == typeid(KeyOutput))
+            if (std::holds_alternative<KeyOutput>(output.target))
             {
                 keyIndexes[output.amount].push_back(poi);
                 auto outputCountForAmount = updateKeyOutputCount(output.amount, 1);
@@ -1110,12 +1231,31 @@ namespace CryptoNote
                 transactionCacheInfo.amountToKeyIndexes[output.amount].push_back(globalIndex);
 
                 KeyOutputInfo outputInfo;
-                outputInfo.publicKey = boost::get<KeyOutput>(output.target).key;
-                outputInfo.transactionHash = transactionCacheInfo.transactionHash;
+                outputInfo.publicKey = std::get<KeyOutput>(output.target).key;
+
+                /* Only a rescan or an explorer reads this back, and a lite node
+                   offers neither below its lite height. It is 32 bytes of high
+                   entropy per key output that nothing can ever read, and the one
+                   part of the database a compressor cannot help with. Zeroed
+                   rather than removed: the record layout and the schema version
+                   stay exactly as they are, no reader needs to know, and a great
+                   many identical zero hashes cost almost nothing once RocksDB
+                   has compressed them. */
+                outputInfo.transactionHash = indexOnly ? Crypto::Hash {} : transactionCacheInfo.transactionHash;
                 outputInfo.unlockTime = transactionCacheInfo.unlockTime;
                 outputInfo.outputIndex = poi.outputIndex;
 
                 batch.insertKeyOutputInfo(output.amount, globalIndex, outputInfo);
+
+                /* Populate compact wallet sync data if requested */
+                if (walletTxOut)
+                {
+                    WalletTypes::KeyOutput keyOut;
+                    keyOut.key = outputInfo.publicKey;
+                    keyOut.amount = output.amount;
+                    keyOut.globalOutputIndex = globalIndex;
+                    walletTxOut->keyOutputs.push_back(keyOut);
+                }
             }
         }
 
@@ -1128,14 +1268,53 @@ namespace CryptoNote
 
         if (!newKeyAmounts.empty())
         {
-            assert(keyOutputAmountsCount.is_initialized());
+            assert(keyOutputAmountsCount.has_value());
             batch.insertKeyOutputAmounts(newKeyAmounts, *keyOutputAmountsCount);
         }
 
+        if (indexOnly)
+        {
+            /* Still count it, or the chain-wide transaction total would only
+               cover the blocks stored in full. */
+            batch.insertTransactionCount(getCachedTransactionsCount() + 1);
+            transactionsCount = *transactionsCount + 1;
+
+            logger(Logging::DEBUGGING) << "push transaction with hash " << cachedTransaction.getTransactionHash()
+                                       << " completed (index only)";
+            return;
+        }
+
         Crypto::Hash paymentId;
-        if (getPaymentIdFromTxExtra(cachedTransaction.getTransaction().extra, paymentId))
+        const bool hasPaymentId = getPaymentIdFromTxExtra(cachedTransaction.getTransaction().extra, paymentId);
+        if (hasPaymentId)
         {
             insertPaymentId(batch, cachedTransaction.getTransactionHash(), paymentId);
+        }
+
+        /* Store the transaction public key so wallet sync can work even after raw blocks are pruned. */
+        const Crypto::PublicKey txPublicKey =
+            getTransactionPublicKeyFromExtra(cachedTransaction.getTransaction().extra);
+        batch.insertTransactionPublicKey(cachedTransaction.getTransactionHash(), txPublicKey);
+
+        /* Finish populating wallet sync data: header fields, key inputs, payment ID */
+        if (walletTxOut)
+        {
+            walletTxOut->hash = cachedTransaction.getTransactionHash();
+            walletTxOut->transactionPublicKey = txPublicKey;
+            walletTxOut->unlockTime = tx.unlockTime;
+
+            for (const auto &input : tx.inputs)
+            {
+                if (std::holds_alternative<KeyInput>(input))
+                {
+                    walletTxOut->keyInputs.push_back(std::get<KeyInput>(input));
+                }
+            }
+
+            if (hasPaymentId)
+            {
+                walletTxOut->paymentID = Common::podToHex(paymentId);
+            }
         }
 
         batch.insertCachedTransaction(transactionCacheInfo, getCachedTransactionsCount() + 1);
@@ -1245,7 +1424,16 @@ namespace CryptoNote
         blockInfo.blockSize = static_cast<uint32_t>(blockSize);
         blockInfo.timestamp = cachedBlock.getBlock().timestamp;
 
-        batch.insertSpentKeyImages(getTopBlockIndex() + 1, validatorState.spentKeyImages);
+        const uint32_t newBlockIndex = getTopBlockIndex() + 1;
+
+        /* Below a lite node's lite height only the indexes that later blocks
+           actually read are kept: the key image -> block index entries, the key
+           output info and per-amount counts written by pushTransaction, and the
+           block info itself. The block body, its transaction hash list, the
+           rewind index and the wallet sync archive all go. See LITENODE.md. */
+        const bool indexOnly = isLiteIndexOnlyHeight(newBlockIndex);
+
+        batch.insertSpentKeyImages(newBlockIndex, validatorState.spentKeyImages, !indexOnly);
 
         auto txHashes = cachedBlock.getBlock().transactionHashes;
         auto baseTransaction = cachedBlock.getBlock().baseTransaction;
@@ -1254,30 +1442,69 @@ namespace CryptoNote
         // base transaction's hash is always the first one in index for this block
         txHashes.insert(txHashes.begin(), cachedBaseTransaction.getTransactionHash());
 
-        batch.insertCachedBlock(blockInfo, getTopBlockIndex() + 1, txHashes);
-        batch.insertRawBlock(getTopBlockIndex() + 1, rawBlock);
+        batch.insertCachedBlock(blockInfo, newBlockIndex, indexOnly ? std::vector<Crypto::Hash> {} : txHashes);
 
+        if (!indexOnly)
+        {
+            batch.insertRawBlock(newBlockIndex, rawBlock);
+        }
+
+        /* Push transactions and simultaneously collect compact wallet sync data */
         auto transactionIndex = 0;
-        pushTransaction(cachedBaseTransaction, getTopBlockIndex() + 1, transactionIndex++, batch);
+        WalletTypes::RawTransaction coinbaseWalletTx;
+        pushTransaction(cachedBaseTransaction, newBlockIndex, transactionIndex++, batch, &coinbaseWalletTx);
 
+        std::vector<WalletTypes::RawTransaction> txWalletData;
+        txWalletData.reserve(cachedTransactions.size());
         for (const auto &transaction : cachedTransactions)
         {
-            pushTransaction(transaction, getTopBlockIndex() + 1, transactionIndex++, batch);
+            txWalletData.emplace_back();
+            pushTransaction(transaction, newBlockIndex, transactionIndex++, batch, &txWalletData.back());
         }
 
-        auto closestBlockIndexDb =
-            requestClosestBlockIndexByTimestamp(roundToMidnight(cachedBlock.getBlock().timestamp), database);
-        if (!closestBlockIndexDb.second)
+        /* Assemble and store compact WalletBlockInfo — survives raw-block pruning.
+           A lite node skips it below the lite height: it exists so a wallet can
+           sync across pruned raw blocks, and a lite node does not offer a sync
+           that reaches down there at all. */
+        if (!indexOnly)
         {
-            logger(Logging::ERROR) << "push block " << cachedBlock.getBlockHash()
-                                   << " request closest block index by timestamp failed";
-            throw std::runtime_error("Couldn't get closest to timestamp block index");
+            WalletTypes::WalletBlockInfo walletBlock;
+            walletBlock.blockHeight = newBlockIndex;
+            walletBlock.blockHash   = cachedBlock.getBlockHash();
+            walletBlock.blockTimestamp = cachedBlock.getBlock().timestamp;
+
+            /* Coinbase: copy base fields only (no keyInputs by design) */
+            WalletTypes::RawCoinbaseTransaction coinbaseSyncTx;
+            coinbaseSyncTx.hash               = coinbaseWalletTx.hash;
+            coinbaseSyncTx.transactionPublicKey = coinbaseWalletTx.transactionPublicKey;
+            coinbaseSyncTx.keyOutputs         = coinbaseWalletTx.keyOutputs;
+            coinbaseSyncTx.unlockTime         = coinbaseWalletTx.unlockTime;
+            walletBlock.coinbaseTransaction   = coinbaseSyncTx;
+
+            walletBlock.transactions = std::move(txWalletData);
+            batch.insertWalletSyncBlock(newBlockIndex, walletBlock);
         }
 
-        if (!closestBlockIndexDb.first)
+        /* The timestamp index exists to answer "which height was this date",
+           which is how a wallet starts a scan from a date. A lite node cannot
+           serve a scan starting below its lite height at all, so it is dead
+           weight down there. */
+        if (!indexOnly)
         {
-            batch.insertClosestTimestampBlockIndex(roundToMidnight(cachedBlock.getBlock().timestamp),
-                                                   getTopBlockIndex() + 1);
+            auto closestBlockIndexDb =
+                requestClosestBlockIndexByTimestamp(roundToMidnight(cachedBlock.getBlock().timestamp), database);
+            if (!closestBlockIndexDb.second)
+            {
+                logger(Logging::ERROR) << "push block " << cachedBlock.getBlockHash()
+                                       << " request closest block index by timestamp failed";
+                throw std::runtime_error("Couldn't get closest to timestamp block index");
+            }
+
+            if (!closestBlockIndexDb.first)
+            {
+                batch.insertClosestTimestampBlockIndex(roundToMidnight(cachedBlock.getBlock().timestamp),
+                                                       getTopBlockIndex() + 1);
+            }
         }
 
         // We aren't even using this so why add this?
@@ -1386,8 +1613,8 @@ namespace CryptoNote
                                      }
 
                                      auto &output = info.outputs[index.outputIndex];
-                                     assert(output.type() == typeid(KeyOutput));
-                                     publicKeys.push_back(boost::get<KeyOutput>(output).key);
+                                     assert(std::holds_alternative<KeyOutput>(output));
+                                     publicKeys.push_back(std::get<KeyOutput>(output).key);
 
                                      return ExtractOutputKeysResult::SUCCESS;
                                  });
@@ -1856,24 +2083,45 @@ namespace CryptoNote
 
     std::tuple<bool, uint64_t> DatabaseBlockchainCache::getBlockHeightForTimestamp(uint64_t timestamp) const
     {
-        const auto midnight = roundToMidnight(timestamp);
+        /* One entry per day, holding the first block mined that day. Asking
+           for a day with no entry used to give up here, and a day with no
+           entry is ordinary: a node that fast-synced or a lite node has none
+           below its floor, a stalled chain skips days outright, and every day
+           has none until its first block is mined. A wallet whose scan start
+           landed on such a day was served nothing at all.
 
-        const auto [blockHeight, success] = requestClosestBlockIndexByTimestamp(midnight, database);
+           So walk back to the nearest earlier day that does have an entry, as
+           getTimestampLowerBoundBlockIndex below already does. The genesis day
+           is always indexed, so the walk ends there at the latest. Starting a
+           scan earlier than asked costs time; not starting one costs the
+           wallet every transaction it has. */
+        auto midnight = roundToMidnight(timestamp);
 
-        /* Failed to read from DB */
-        if (!success)
+        while (true)
         {
-            logger(Logging::DEBUGGING) << "getTimestampLowerBoundBlockIndex failed: failed to read database";
-            throw std::runtime_error("Couldn't get closest to timestamp block index");
-        }
+            const auto [blockHeight, success] = requestClosestBlockIndexByTimestamp(midnight, database);
 
-        /* Failed to find the block height with this timestamp */
-        if (!blockHeight)
-        {
-            return {false, 0};
-        }
+            /* Failed to read from DB */
+            if (!success)
+            {
+                logger(Logging::DEBUGGING) << "getBlockHeightForTimestamp failed: failed to read database";
+                throw std::runtime_error("Couldn't get closest to timestamp block index");
+            }
 
-        return {true, *blockHeight};
+            if (blockHeight)
+            {
+                return {true, *blockHeight};
+            }
+
+            /* Ran out of days before finding one. Nothing in this database is
+               older than the timestamp asked for. */
+            if (midnight < ONE_DAY_SECONDS)
+            {
+                return {false, 0};
+            }
+
+            midnight -= ONE_DAY_SECONDS;
+        }
     }
 
     uint32_t DatabaseBlockchainCache::getTimestampLowerBoundBlockIndex(uint64_t timestamp) const
@@ -2237,6 +2485,48 @@ namespace CryptoNote
         return blockHashes;
     }
 
+    uint64_t DatabaseBlockchainCache::getMinRawBlockHeight(uint64_t fromHeight) const
+    {
+        const uint64_t storageBlockCount = getBlockCount();
+
+        if (fromHeight >= storageBlockCount)
+        {
+            return fromHeight;
+        }
+
+        /* Fast path: probe the requested height directly. This is the common
+           case (the range is not pruned) and answers the question in a single
+           read instead of a log2(chain) binary search on every RPC request. */
+        {
+            auto batch = BlockchainReadBatch().requestRawBlock(static_cast<uint32_t>(fromHeight));
+
+            if (!readDatabase(batch).getRawBlocks().empty())
+            {
+                return fromHeight;
+            }
+        }
+
+        uint64_t lo = fromHeight + 1, hi = storageBlockCount;
+
+        while (lo < hi)
+        {
+            uint64_t mid = lo + (hi - lo) / 2;
+            auto batch = BlockchainReadBatch().requestRawBlock(static_cast<uint32_t>(mid));
+            const auto result = readDatabase(batch).getRawBlocks();
+
+            if (!result.empty())
+            {
+                hi = mid;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+
+        return lo;
+    }
+
     std::vector<RawBlock> DatabaseBlockchainCache::getNonEmptyBlocks(const uint64_t startHeight,
                                                                      const size_t blockCount) const
     {
@@ -2248,21 +2538,42 @@ namespace CryptoNote
 
         while (orderedBlocks.size() < blockCount && height < storageBlockCount)
         {
-            uint64_t startHeight = height;
+            uint64_t batchStart = height;
 
             /* Lets try taking the amount we need *2, to try and balance not needing
                multiple DB requests to get the amount we need of non empty blocks, with
                not taking too many */
-            uint64_t endHeight = startHeight + (blockCount * 2);
+            uint64_t endHeight = batchStart + (blockCount * 2);
 
-            auto blockBatch = BlockchainReadBatch().requestRawBlocks(startHeight, endHeight);
+            auto blockBatch = BlockchainReadBatch().requestRawBlocks(batchStart, endHeight);
             const auto rawBlocks = readDatabase(blockBatch).getRawBlocks();
 
-            while (orderedBlocks.size() < blockCount && height < startHeight + rawBlocks.size())
+            if (rawBlocks.empty())
             {
-                const auto block = rawBlocks.at(height);
+                /* All blocks in this batch were pruned. Binary-search for the first
+                   available raw block to jump directly to the prune floor instead of
+                   scanning O(N/batch) sequential DB reads. */
+                const uint64_t nextHeight = getMinRawBlockHeight(batchStart);
 
-                height++;
+                /* Forward progress guard: if the search cannot advance past the
+                   current position (only reachable if the chain changed under us
+                   between the two reads), stop rather than spin forever. */
+                if (nextHeight <= batchStart)
+                {
+                    break;
+                }
+
+                height = nextHeight;
+                continue;
+            }
+
+            /* Sort by height for ordered iteration. Pruned entries were already
+               erased from the map by deserializeValues, so gaps are skipped. */
+            std::map<uint32_t, RawBlock> sorted(rawBlocks.begin(), rawBlocks.end());
+
+            for (const auto &[h, block] : sorted)
+            {
+                height = h + 1;
 
                 if (block.transactions.empty())
                 {
@@ -2270,6 +2581,11 @@ namespace CryptoNote
                 }
 
                 orderedBlocks.push_back(block);
+
+                if (orderedBlocks.size() >= blockCount)
+                {
+                    break;
+                }
             }
         }
 
@@ -2284,15 +2600,334 @@ namespace CryptoNote
         /* Get the info from the DB */
         auto rawBlocks = readDatabase(blockBatch).getRawBlocks();
 
+        /* Sort by height and return only entries found in DB. Pruned entries were
+           erased from the map by deserializeValues, so gaps are silently skipped. */
+        std::map<uint32_t, RawBlock> sorted(rawBlocks.begin(), rawBlocks.end());
+
         std::vector<RawBlock> orderedBlocks;
 
-        /* Order, and convert from map, to vector */
-        for (uint64_t height = startHeight; height < startHeight + rawBlocks.size(); height++)
+        for (const auto &[height, block] : sorted)
         {
-            orderedBlocks.push_back(rawBlocks.at(height));
+            orderedBlocks.push_back(block);
         }
 
         return orderedBlocks;
+    }
+
+    std::vector<WalletTypes::WalletBlockInfo> DatabaseBlockchainCache::getPrunedWalletBlocks(
+        uint64_t startHeight,
+        uint64_t endHeight,
+        bool skipCoinbaseTransactions) const
+    {
+        std::vector<WalletTypes::WalletBlockInfo> result;
+
+        if (startHeight >= endHeight)
+        {
+            return result;
+        }
+
+        /* Cap to available chain height */
+        const uint64_t storageCount = static_cast<uint64_t>(getBlockCount());
+
+        logger(Logging::DEBUGGING) << "getPrunedWalletBlocks: [" << startHeight << ", " << endHeight
+                              << ") storageCount=" << storageCount;
+
+        if (endHeight > storageCount)
+        {
+            endHeight = storageCount;
+        }
+
+        /* Track which heights we've covered so we can fall back to legacy
+           for any gaps where "w" records are absent. */
+        std::set<uint64_t> coveredHeights;
+
+        /* Read compact wallet sync records stored at push time under the "w" prefix.
+           These contain complete WalletBlockInfo (outputs + key images + payment IDs)
+           and are never deleted by the prune pass.
+           Process in batches of 100 to keep DB read sizes reasonable. */
+        constexpr uint64_t BATCH_SIZE = 100;
+
+        for (uint64_t batchStart = startHeight; batchStart < endHeight; batchStart += BATCH_SIZE)
+        {
+            const uint64_t batchEnd = std::min(batchStart + BATCH_SIZE, endHeight);
+
+            BlockchainReadBatch batch;
+            batch.requestWalletSyncBlocks(batchStart, batchEnd);
+
+            /* Use the batched read. readThreadSafe issues a separate lookup per
+               key, so serving a hundred-block batch cost a hundred round trips
+               into the database instead of one; the rest of this class already
+               reads through the same batched path from these threads. */
+            if (database.read(batch)) { continue; }
+
+            auto res = batch.extractResult();
+            const auto &walletBlocks = res.getWalletSyncBlocks();
+
+            /* Return blocks in height order */
+            for (uint64_t h = batchStart; h < batchEnd; ++h)
+            {
+                auto it = walletBlocks.find(static_cast<uint32_t>(h));
+                if (it == walletBlocks.end()) { continue; }
+
+                WalletTypes::WalletBlockInfo block = it->second;
+                if (skipCoinbaseTransactions)
+                {
+                    block.coinbaseTransaction = std::nullopt;
+                }
+                result.push_back(std::move(block));
+                coveredHeights.insert(h);
+            }
+        }
+
+        /* If some heights are missing "w" records (DB predates this feature),
+           fill the gaps using the legacy reconstruction path. */
+        const uint64_t expectedCount = endHeight - startHeight;
+
+        logger(Logging::DEBUGGING) << "getPrunedWalletBlocks: w-records covered " << coveredHeights.size()
+                              << " of " << expectedCount << " heights, result so far: " << result.size();
+
+        if (coveredHeights.size() < expectedCount)
+        {
+            /* Rebuild only the heights actually missing. This used to rerun the
+               legacy path over the whole range whenever a single height lacked
+               a record, and one always does near the start of the chain because
+               genesis is pushed without one, so every wallet syncing from zero
+               paid for a full reconstruction of each batch and then discarded
+               nearly all of it. */
+            uint64_t firstMissing = endHeight;
+            uint64_t lastMissing = startHeight;
+
+            for (uint64_t h = startHeight; h < endHeight; ++h)
+            {
+                if (coveredHeights.find(h) == coveredHeights.end())
+                {
+                    firstMissing = std::min(firstMissing, h);
+                    lastMissing = std::max(lastMissing, h);
+                }
+            }
+
+            if (firstMissing < endHeight)
+            {
+                auto legacyBlocks =
+                    getPrunedWalletBlocksLegacy(firstMissing, lastMissing + 1, skipCoinbaseTransactions);
+
+                logger(Logging::DEBUGGING)
+                    << "getPrunedWalletBlocksLegacy returned " << legacyBlocks.size() << " blocks for ["
+                    << firstMissing << ", " << (lastMissing + 1) << ")";
+
+                for (auto &block : legacyBlocks)
+                {
+                    if (coveredHeights.find(block.blockHeight) == coveredHeights.end())
+                    {
+                        result.push_back(std::move(block));
+                    }
+                }
+
+                /* Re-sort by height after merging */
+                std::sort(result.begin(), result.end(),
+                    [](const auto &a, const auto &b) { return a.blockHeight < b.blockHeight; });
+            }
+        }
+
+        logger(Logging::DEBUGGING) << "getPrunedWalletBlocks: final result " << result.size() << " blocks";
+
+        return result;
+    }
+
+    /* Legacy reconstruction path — kept for databases upgraded without a resync.
+       Reconstructs partial WalletBlockInfo from surviving DB fragments.
+       Missing: key images (spent detection) and payment IDs.
+       Only called if "w" records are absent for a height range. */
+    std::vector<WalletTypes::WalletBlockInfo> DatabaseBlockchainCache::getPrunedWalletBlocksLegacy(
+        uint64_t startHeight,
+        uint64_t endHeight,
+        bool skipCoinbaseTransactions) const
+    {
+        std::vector<WalletTypes::WalletBlockInfo> result;
+
+        if (startHeight >= endHeight) { return result; }
+
+        const uint64_t storageCount = static_cast<uint64_t>(getBlockCount());
+        if (endHeight > storageCount) { endHeight = storageCount; }
+
+        constexpr uint64_t BATCH_SIZE = 100;
+
+        for (uint64_t batchStart = startHeight; batchStart < endHeight; batchStart += BATCH_SIZE)
+        {
+            const uint64_t batchEnd = std::min(batchStart + BATCH_SIZE, endHeight);
+
+            /* Step 1: read block infos and tx hash lists for this batch */
+            BlockchainReadBatch blockBatch;
+            for (uint64_t h = batchStart; h < batchEnd; ++h)
+            {
+                blockBatch.requestCachedBlock(static_cast<uint32_t>(h));
+                blockBatch.requestTransactionHashesByBlock(static_cast<uint32_t>(h));
+            }
+
+            std::optional<BlockchainReadResult> blockResultOpt;
+            try
+            {
+                blockResultOpt.emplace(readDatabase(blockBatch));
+            }
+            catch (const std::exception &e)
+            {
+                logger(Logging::ERROR) << "getPrunedWalletBlocksLegacy: batch readDatabase failed for ["
+                                       << batchStart << ", " << batchEnd << "): " << e.what();
+                continue;
+            }
+
+            const auto &blockInfos = blockResultOpt->getCachedBlocks();
+            const auto &txHashesByBlock = blockResultOpt->getTransactionHashesByBlocks();
+
+            logger(Logging::DEBUGGING) << "getPrunedWalletBlocksLegacy: batch [" << batchStart
+                                  << ", " << batchEnd << ") found " << blockInfos.size()
+                                  << " blockInfos, " << txHashesByBlock.size() << " txHashesByBlock";
+
+            for (uint64_t h = batchStart; h < batchEnd; ++h)
+            {
+                try
+                {
+                    const auto biIt = blockInfos.find(static_cast<uint32_t>(h));
+                    if (biIt == blockInfos.end())
+                    {
+                        logger(Logging::WARNING) << "getPrunedWalletBlocksLegacy: missing CachedBlockInfo at height " << h;
+                        continue;
+                    }
+                    const auto txIt = txHashesByBlock.find(static_cast<uint32_t>(h));
+
+                    const CachedBlockInfo &bi = biIt->second;
+
+                    WalletTypes::WalletBlockInfo walletBlock;
+                    walletBlock.blockHeight = h;
+                    walletBlock.blockHash = bi.blockHash;
+                    walletBlock.blockTimestamp = bi.timestamp;
+
+                    if (txIt == txHashesByBlock.end())
+                    {
+                        /* No tx-hash list for this block; emit a metadata-only beacon so
+                           the wallet advances its height counter through the pruned range. */
+                        result.push_back(walletBlock);
+                        continue;
+                    }
+
+                    const std::vector<Crypto::Hash> &txHashes = txIt->second;
+
+                    if (txHashes.empty())
+                    {
+                        result.push_back(walletBlock);
+                        continue;
+                    }
+
+                    /* Step 2: read tx infos + tx public keys for all txs in this block */
+                    BlockchainReadBatch txBatch;
+                    txBatch.requestCachedTransactions(txHashes);
+                    txBatch.requestTransactionPublicKeys(txHashes);
+                    auto txResult = readDatabase(txBatch);
+                    const auto &txInfos = txResult.getCachedTransactions();
+                    const auto &txPubKeys = txResult.getTransactionPublicKeys();
+
+                    for (const auto &txHash : txHashes)
+                    {
+                        auto txInfoIt = txInfos.find(txHash);
+                        if (txInfoIt == txInfos.end())
+                        {
+                            continue;
+                        }
+                        const ExtendedTransactionInfo &txInfo = txInfoIt->second;
+
+                        /* Retrieve stored transaction public key (may be zero if tx predates this feature) */
+                        Crypto::PublicKey txPubKey{};
+                        auto pkIt = txPubKeys.find(txHash);
+                        if (pkIt != txPubKeys.end())
+                        {
+                            txPubKey = pkIt->second;
+                        }
+
+                        /* Build reverse map: globalIndex → amount, from amountToKeyIndexes */
+                        std::unordered_map<uint32_t, uint64_t> globalIndexToAmount;
+                        for (const auto &[amount, globalIndices] : txInfo.amountToKeyIndexes)
+                        {
+                            for (const auto gIdx : globalIndices)
+                            {
+                                globalIndexToAmount[gIdx] = amount;
+                            }
+                        }
+
+                        /* Build key outputs list */
+                        std::vector<WalletTypes::KeyOutput> keyOutputs;
+                        keyOutputs.reserve(txInfo.outputs.size());
+                        for (size_t i = 0; i < txInfo.outputs.size(); ++i)
+                        {
+                            const auto &target = txInfo.outputs[i];
+                            if (!std::holds_alternative<CryptoNote::KeyOutput>(target))
+                            {
+                                continue;
+                            }
+                            WalletTypes::KeyOutput ko;
+                            ko.key = std::get<CryptoNote::KeyOutput>(target).key;
+                            ko.amount = 0;
+                            if (i < txInfo.globalIndexes.size())
+                            {
+                                const uint32_t gIdx = txInfo.globalIndexes[i];
+                                auto amtIt = globalIndexToAmount.find(gIdx);
+                                if (amtIt != globalIndexToAmount.end())
+                                {
+                                    ko.amount = amtIt->second;
+                                }
+                                ko.globalOutputIndex = gIdx;
+                            }
+                            keyOutputs.push_back(ko);
+                        }
+
+                        /* transactionIndex == 0 means coinbase */
+                        if (txInfo.transactionIndex == 0)
+                        {
+                            if (!skipCoinbaseTransactions)
+                            {
+                                WalletTypes::RawCoinbaseTransaction coinbaseTx;
+                                coinbaseTx.hash = txHash;
+                                coinbaseTx.transactionPublicKey = txPubKey;
+                                coinbaseTx.unlockTime = txInfo.unlockTime;
+                                coinbaseTx.keyOutputs = std::move(keyOutputs);
+                                walletBlock.coinbaseTransaction = std::move(coinbaseTx);
+                            }
+                        }
+                        else
+                        {
+                            WalletTypes::RawTransaction tx;
+                            tx.hash = txHash;
+                            tx.transactionPublicKey = txPubKey;
+                            tx.unlockTime = txInfo.unlockTime;
+                            tx.keyOutputs = std::move(keyOutputs);
+                            /* keyInputs and paymentID are not preserved after pruning */
+                            walletBlock.transactions.push_back(std::move(tx));
+                        }
+                    }
+
+                    result.push_back(walletBlock);
+                }
+                catch (const std::exception &e)
+                {
+                    logger(Logging::WARNING) << "getPrunedWalletBlocksLegacy: failed at height "
+                                             << h << ": " << e.what();
+                    /* Push a metadata-only block so the wallet still advances its
+                       height counter through the pruned range. The block's hash and
+                       timestamp come from CachedBlockInfo which was already read
+                       successfully in the outer batch. */
+                    const auto biIt2 = blockInfos.find(static_cast<uint32_t>(h));
+                    if (biIt2 != blockInfos.end())
+                    {
+                        WalletTypes::WalletBlockInfo fallbackBlock;
+                        fallbackBlock.blockHeight = h;
+                        fallbackBlock.blockHash = biIt2->second.blockHash;
+                        fallbackBlock.blockTimestamp = biIt2->second.timestamp;
+                        result.push_back(std::move(fallbackBlock));
+                    }
+                }
+            }
+        }
+
+        return result;
     }
 
     std::unordered_map<Crypto::Hash, std::vector<uint64_t>> DatabaseBlockchainCache::getGlobalIndexes(
@@ -2403,7 +3038,7 @@ namespace CryptoNote
                 if (!states.empty() && states[0])
                     height = static_cast<uint32_t>(std::stoul(values[0]));
             }
-            boost::optional<uint32_t> height;
+            std::optional<uint32_t> height;
         };
 
         SyncFloorReadBatch batch;
@@ -2567,9 +3202,9 @@ namespace CryptoNote
          * getTopBlockIndex() jumps to anchorHeight, so cacheStartIndex would be
          * miscalculated as anchorHeight and the genesis entry would be treated as
          * the block at that height – corrupting LWMA input data. */
-        topBlockIndex = boost::none;
+        topBlockIndex = std::nullopt;
         unitsCache.clear();
-        topBlockHash  = boost::none;
+        topBlockHash  = std::nullopt;
 
         logger(Logging::INFO) << "injectBootstrapAnchor: complete, DB top is now " << getTopBlockIndex();
     }
@@ -2601,7 +3236,28 @@ namespace CryptoNote
         auto baseTransaction = genesisBlock.getBlock().baseTransaction;
         auto cachedBaseTransaction = CachedTransaction {std::move(baseTransaction)};
 
-        pushTransaction(cachedBaseTransaction, 0, 0, batch);
+        /* Collect the compact wallet-sync record for genesis too. Every other
+           block gets one at push time; skipping genesis left a permanent hole
+           at height 0, which is exactly where a wallet syncing from scratch
+           starts looking. */
+        WalletTypes::RawTransaction coinbaseWalletTx;
+        pushTransaction(cachedBaseTransaction, 0, 0, batch, &coinbaseWalletTx);
+
+        {
+            WalletTypes::WalletBlockInfo walletBlock;
+            walletBlock.blockHeight = 0;
+            walletBlock.blockHash = genesisBlock.getBlockHash();
+            walletBlock.blockTimestamp = genesisBlock.getBlock().timestamp;
+
+            WalletTypes::RawCoinbaseTransaction coinbaseSyncTx;
+            coinbaseSyncTx.hash = coinbaseWalletTx.hash;
+            coinbaseSyncTx.transactionPublicKey = coinbaseWalletTx.transactionPublicKey;
+            coinbaseSyncTx.keyOutputs = coinbaseWalletTx.keyOutputs;
+            coinbaseSyncTx.unlockTime = coinbaseWalletTx.unlockTime;
+            walletBlock.coinbaseTransaction = coinbaseSyncTx;
+
+            batch.insertWalletSyncBlock(0, walletBlock);
+        }
 
         batch.insertCachedBlock(blockInfo, 0, {cachedBaseTransaction.getTransactionHash()});
         batch.insertRawBlock(0, {toBinaryArray(genesisBlock.getBlock()), {}});
@@ -2628,7 +3284,15 @@ namespace CryptoNote
             const auto &pf = res.getPruneFloor();
             m_pruneFloor = pf.second ? pf.first : 0;
         }
-        return *m_pruneFloor;
+
+        /* A lite node holds no raw block below its lite height either, and the
+           floor is exactly the question every caller is asking: the lowest
+           height a block body can be read from. Reporting it here means the
+           peer-serving, wallet-sync and getrawblocks paths that already handle
+           a pruned floor handle the lite region too, rather than each having to
+           learn about lite mode separately. The two are mutually exclusive at
+           the command line, so in practice only one of them is ever non-zero. */
+        return std::max(*m_pruneFloor, liteHeight);
     }
 
     void DatabaseBlockchainCache::pruneRawBlocksBefore(uint32_t height)
@@ -2636,6 +3300,17 @@ namespace CryptoNote
         /* Never prune genesis block (index 0); clamp to 1. */
         if (height <= 1)
         {
+            return;
+        }
+
+        /* --lite and --prune cannot be combined, so this is only reachable if
+           something asks a lite node to prune anyway. There is nothing below
+           the lite height to delete, and writing a prune floor there would
+           record a deletion that never happened. */
+        if (liteHeight != 0)
+        {
+            logger(Logging::DEBUGGING)
+                << "pruneRawBlocksBefore: ignoring on a lite node; nothing is stored below height " << liteHeight;
             return;
         }
 

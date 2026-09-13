@@ -1,0 +1,23 @@
+# Everything committed here is already stored with LF. Saying so explicitly
+# means a contributor whose core.autocrlf is unset or set to false cannot
+# introduce CRLF into the repository, which is the usual way a tree like this
+# ends up with mixed endings.
+* text=auto eol=lf
+
+# Vendored upstream sources. Keep them byte-identical to what was imported, so
+# re-vendoring shows only real upstream changes.
+external/** -text
+
+# Windows shells require CRLF in these.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary, never munge or diff as text.
+*.ico binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.zip binary
+*.gz binary
+*.pdf binary

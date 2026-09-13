@@ -19,7 +19,7 @@ namespace Logging
         category(category),
         logLevel(level),
         message(color),
-        timestamp(boost::posix_time::microsec_clock::local_time()),
+        timestamp(std::chrono::system_clock::now()),
         gotText(false)
     {
     }
@@ -41,7 +41,7 @@ namespace Logging
         logLevel(other.logLevel),
         logger(other.logger),
         message(other.message),
-        timestamp(boost::posix_time::microsec_clock::local_time()),
+        timestamp(std::chrono::system_clock::now()),
         gotText(false)
     {
         this->set_rdbuf(this);
@@ -55,7 +55,7 @@ namespace Logging
         logLevel(other.logLevel),
         logger(other.logger),
         message(other.message),
-        timestamp(boost::posix_time::microsec_clock::local_time()),
+        timestamp(std::chrono::system_clock::now()),
         gotText(false)
     {
         if (this != &other)

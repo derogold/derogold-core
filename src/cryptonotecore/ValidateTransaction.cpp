@@ -206,9 +206,9 @@ bool ValidateTransaction::validateTransactionInputs()
     {
         uint64_t amount = 0;
 
-        if (input.type() == typeid(CryptoNote::KeyInput))
+        if (std::holds_alternative<CryptoNote::KeyInput>(input))
         {
-            const CryptoNote::KeyInput &in = boost::get<CryptoNote::KeyInput>(input);
+            const CryptoNote::KeyInput &in = std::get<CryptoNote::KeyInput>(input);
             amount = in.amount;
 
             if (!ki.insert(in.keyImage).second)
@@ -321,9 +321,9 @@ bool ValidateTransaction::validateTransactionOutputs()
             }
         }*/
 
-        if (output.target.type() == typeid(CryptoNote::KeyOutput))
+        if (std::holds_alternative<CryptoNote::KeyOutput>(output.target))
         {
-            if (!check_key(boost::get<CryptoNote::KeyOutput>(output.target).key))
+            if (!check_key(std::get<CryptoNote::KeyOutput>(output.target).key))
             {
                 setTransactionValidationResult(
                      CryptoNote::error::TransactionValidationError::OUTPUT_INVALID_KEY,
@@ -585,7 +585,7 @@ bool ValidateTransaction::validateTransactionInputsExpensive()
         bool anyInputNeedsSyncFloorBypass = false;
         for (const auto &input : m_transaction.inputs)
         {
-            const CryptoNote::KeyInput &in = boost::get<CryptoNote::KeyInput>(input);
+            const CryptoNote::KeyInput &in = std::get<CryptoNote::KeyInput>(input);
             std::vector<Crypto::PublicKey> dummyKeys;
             std::vector<uint32_t> globalIndexes(in.outputIndexes.size());
             globalIndexes[0] = in.outputIndexes[0];
@@ -626,7 +626,7 @@ bool ValidateTransaction::validateTransactionInputsExpensive()
     {
         /* Validate each input on a separate thread in our thread pool */
         validationResult.push_back(m_threadPool.addJob([inputIndex, &input, &prefixHash, &cancelValidation, this]{
-            const CryptoNote::KeyInput &in = boost::get<CryptoNote::KeyInput>(input);
+            const CryptoNote::KeyInput &in = std::get<CryptoNote::KeyInput>(input);
             if (cancelValidation)
             {
                 return false; // fail the validation immediately if cancel requested

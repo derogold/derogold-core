@@ -2,48 +2,51 @@
 include_directories(${CMAKE_SOURCE_DIR}/external/cpp-linenoise)
 include_directories(${CMAKE_SOURCE_DIR}/external/nlohmann-json)
 
-# Show cmake where the source files are
-# Note, if you add remove a source file, you will need to re-run cmake so it
-# can find the new file
-file(GLOB_RECURSE Common common/*)
-file(GLOB_RECURSE Config config/*)
-file(GLOB_RECURSE Crypto crypto/*)
-file(GLOB_RECURSE CryptoNoteCore cryptonotecore/* CryptoNoteConfig.h)
-file(GLOB_RECURSE CryptoNoteProtocol cryptonoteprotocol/*)
-file(GLOB_RECURSE CryptoTest cryptotest/*)
-file(GLOB_RECURSE Errors errors/*)
-file(GLOB_RECURSE Http http/*)
-file(GLOB_RECURSE JsonRpcServer jsonrpcserver/*)
-file(GLOB_RECURSE Logging logging/*)
-file(GLOB_RECURSE Logger logger/*)
-file(GLOB_RECURSE miner miner/*)
-file(GLOB_RECURSE Mnemonics mnemonics/*)
-file(GLOB_RECURSE Nigel nigel/*)
-file(GLOB_RECURSE NodeRpcProxy noderpcproxy/*)
-file(GLOB_RECURSE P2p p2p/*)
-file(GLOB_RECURSE Rpc rpc/*)
-file(GLOB_RECURSE Serialization serialization/*)
-file(GLOB_RECURSE SubWallets subwallets/*)
-file(GLOB_RECURSE Transfers transfers/*)
-file(GLOB_RECURSE DeroGoldd daemon/*)
-file(GLOB_RECURSE Utilities utilities/*)
-file(GLOB_RECURSE Wallet wallet/*)
-file(GLOB_RECURSE WalletApi walletapi/*)
-file(GLOB_RECURSE WalletBackend walletbackend/*)
-file(GLOB_RECURSE WalletService walletservice/*)
-file(GLOB_RECURSE WalletUpgrader walletupgrader/*)
-file(GLOB_RECURSE zedwallet++ zedwallet++/*)
+# Show cmake where the source files are. CONFIGURE_DEPENDS makes the build
+# system re-run the glob when the directory contents change, so adding or
+# removing a source file does not need a manual re-configure.
+file(GLOB_RECURSE Common CONFIGURE_DEPENDS common/*)
+file(GLOB_RECURSE Config CONFIGURE_DEPENDS config/*)
+# icon.ico is the CPack installer icon and version.h.in is configured into the
+# build directory. Neither is a source file.
+list(FILTER Config EXCLUDE REGEX "[.](ico|in)$")
+file(GLOB_RECURSE Crypto CONFIGURE_DEPENDS crypto/*)
+file(GLOB_RECURSE CryptoNoteCore CONFIGURE_DEPENDS cryptonotecore/* CryptoNoteConfig.h)
+file(GLOB_RECURSE CryptoNoteProtocol CONFIGURE_DEPENDS cryptonoteprotocol/*)
+file(GLOB_RECURSE CryptoTest CONFIGURE_DEPENDS cryptotest/*)
+file(GLOB_RECURSE Errors CONFIGURE_DEPENDS errors/*)
+file(GLOB_RECURSE Http CONFIGURE_DEPENDS http/*)
+file(GLOB_RECURSE JsonRpcServer CONFIGURE_DEPENDS jsonrpcserver/*)
+file(GLOB_RECURSE Logging CONFIGURE_DEPENDS logging/*)
+file(GLOB_RECURSE Logger CONFIGURE_DEPENDS logger/*)
+file(GLOB_RECURSE miner CONFIGURE_DEPENDS miner/*)
+file(GLOB_RECURSE Mnemonics CONFIGURE_DEPENDS mnemonics/*)
+file(GLOB_RECURSE Nigel CONFIGURE_DEPENDS nigel/*)
+file(GLOB_RECURSE NodeRpcProxy CONFIGURE_DEPENDS noderpcproxy/*)
+file(GLOB_RECURSE P2p CONFIGURE_DEPENDS p2p/*)
+file(GLOB_RECURSE Rpc CONFIGURE_DEPENDS rpc/*)
+file(GLOB_RECURSE Serialization CONFIGURE_DEPENDS serialization/*)
+file(GLOB_RECURSE SubWallets CONFIGURE_DEPENDS subwallets/*)
+file(GLOB_RECURSE Transfers CONFIGURE_DEPENDS transfers/*)
+file(GLOB_RECURSE DeroGoldd CONFIGURE_DEPENDS daemon/*)
+file(GLOB_RECURSE Utilities CONFIGURE_DEPENDS utilities/*)
+file(GLOB_RECURSE Wallet CONFIGURE_DEPENDS wallet/*)
+file(GLOB_RECURSE WalletApi CONFIGURE_DEPENDS walletapi/*)
+file(GLOB_RECURSE WalletBackend CONFIGURE_DEPENDS walletbackend/*)
+file(GLOB_RECURSE WalletService CONFIGURE_DEPENDS walletservice/*)
+file(GLOB_RECURSE WalletUpgrader CONFIGURE_DEPENDS walletupgrader/*)
+file(GLOB_RECURSE zedwallet++ CONFIGURE_DEPENDS zedwallet++/*)
 
 if(WIN32)
-    file(GLOB_RECURSE System system/* platform/windows/system/*)
+    file(GLOB_RECURSE System CONFIGURE_DEPENDS system/* platform/windows/system/*)
 elseif(APPLE)
-    file(GLOB_RECURSE System system/* platform/osx/system/* platform/posix/system/*)
+    file(GLOB_RECURSE System CONFIGURE_DEPENDS system/* platform/osx/system/* platform/posix/system/*)
 else()
-    file(GLOB_RECURSE System system/* platform/linux/system/* platform/posix/system/*)
+    file(GLOB_RECURSE System CONFIGURE_DEPENDS system/* platform/linux/system/* platform/posix/system/*)
 endif()
 
 # Group the files together in IDEs
-source_group("" FILES $${Common} ${Config} ${Crypto} ${CryptoNoteCore} ${CryptoNoteProtocol} ${DeroGoldd} ${JsonRpcServer} ${Http} ${Logging} ${Logger} ${miner} ${Mnemonics} ${Nigel} ${NodeRpcProxy} ${P2p} ${Rpc} ${Serialization} ${System} ${Transfers} ${Wallet} ${WalletApi} ${WalletBackend} ${WalletService} ${zedwallet++} ${CryptoTest} ${Errors} ${Utilities} ${WalletUpgrader} ${SubWallets})
+source_group("" FILES ${Common} ${Config} ${Crypto} ${CryptoNoteCore} ${CryptoNoteProtocol} ${DeroGoldd} ${JsonRpcServer} ${Http} ${Logging} ${Logger} ${miner} ${Mnemonics} ${Nigel} ${NodeRpcProxy} ${P2p} ${Rpc} ${Serialization} ${System} ${Transfers} ${Wallet} ${WalletApi} ${WalletBackend} ${WalletService} ${zedwallet++} ${CryptoTest} ${Errors} ${Utilities} ${WalletUpgrader} ${SubWallets})
 
 # Define a group of files as a library to link against
 add_library(Common STATIC ${Common})
@@ -103,29 +106,38 @@ if(MSVC OR MINGW)
 endif()
 
 # Add the dependencies we need
-target_link_libraries(Common Boost::boost)
 target_link_libraries(Config rapidjson)
 target_link_libraries(Crypto rapidjson)
-target_link_libraries(CryptoNoteCore Common Crypto Http Logging P2P Rpc Serialization System Utilities WalletBackend Boost::boost Boost::serialization rapidjson)
+target_link_libraries(CryptoNoteCore PUBLIC Common Crypto Http Logging P2P Rpc Serialization System Utilities WalletBackend rapidjson)
+
+# RocksDBWrapper.cpp lives in this library, so this is where its headers are
+# needed. Under vcpkg they happened to be on the global include path and no
+# link was required; now that RocksDB is an ordinary target, leaving this out
+# meant the compiler fell back to whatever /usr/include/rocksdb happened to
+# hold, which on most machines is a version far older than this code needs.
+#
+# PRIVATE on purpose: only the daemon also includes RocksDBWrapper.h, and it
+# links RocksDB itself, so the C++20 requirement RocksDB carries stays with
+# this target instead of spreading across the whole project.
+target_link_libraries(CryptoNoteCore PRIVATE RocksDB::rocksdb)
 target_link_libraries(cryptotest Common Crypto rapidjson cxxopts::cxxopts)
-target_link_libraries(DeroGoldd CryptoNoteCore Errors System Boost::boost Boost::serialization cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson RocksDB::rocksdb)
+target_link_libraries(DeroGoldd CryptoNoteCore Errors System cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson RocksDB::rocksdb)
 target_link_libraries(Errors Crypto SubWallets Utilities)
-target_link_libraries(JsonRpcServer Boost::boost)
 target_link_libraries(Logging Common)
-target_link_libraries(Mnemonics Errors Boost::boost)
+target_link_libraries(Mnemonics Errors)
 target_link_libraries(miner Crypto Errors Serialization System Utilities cxxopts::cxxopts httplib::httplib OpenSSL::Crypto OpenSSL::SSL rapidjson)
 target_link_libraries(Nigel CryptoNoteCore Errors httplib::httplib OpenSSL::Crypto OpenSSL::SSL)
 target_link_libraries(NodeRpcProxy Rpc)
-target_link_libraries(P2P CryptoNoteCore Serialization System Boost::boost miniupnpc::miniupnpc)
+target_link_libraries(P2P CryptoNoteCore Serialization System miniupnpc::miniupnpc)
 target_link_libraries(Rpc CryptoNoteCore P2P Utilities httplib::httplib rapidjson)
-target_link_libraries(Serialization Common Crypto Boost::boost)
+target_link_libraries(Serialization Common Crypto)
 target_link_libraries(SubWallets Common Logger rapidjson)
 target_link_libraries(Transfers CryptoNoteCore)
 target_link_libraries(Utilities Common Errors rapidjson)
-target_link_libraries(Wallet Common CryptoNoteCore NodeRpcProxy Transfers WalletBackend Boost::boost)
+target_link_libraries(Wallet Common CryptoNoteCore NodeRpcProxy Transfers WalletBackend)
 target_link_libraries(WalletApi WalletBackend cxxopts::cxxopts httplib::httplib OpenSSL::Crypto OpenSSL::SSL)
 target_link_libraries(WalletBackend Config Logger Mnemonics Nigel Serialization SubWallets Utilities Wallet cryptopp::cryptopp rapidjson)
-target_link_libraries(WalletService Errors JsonRpcServer Mnemonics Wallet Boost::boost cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson)
+target_link_libraries(WalletService Errors JsonRpcServer Mnemonics Wallet cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson)
 target_link_libraries(WalletUpgrader Common Utilities WalletBackend cxxopts::cxxopts)
 target_link_libraries(zedwallet++ WalletBackend cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson)
 
@@ -164,7 +176,7 @@ install(TARGETS DeroGoldd zedwallet++ WalletService miner WalletApi WalletUpgrad
 # CPack
 set(CPACK_PACKAGE_NAME "DeroGold")
 set(CPACK_PACKAGE_VENDOR "The DeroGold Developers")
-set(CPACK_PACKAGE_ICON "${CMake_SOURCE_DIR}/src/config/icon.ico")
+set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/src/config/icon.ico")
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/Packaging")
 set(CPACK_PACKAGE_CONTACT "goldmember@derogold.com")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${SET_PACKAGE_OUTPUT_SUFFIX}")

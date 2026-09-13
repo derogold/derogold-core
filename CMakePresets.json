@@ -79,7 +79,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -93,7 +92,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -107,7 +105,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -121,7 +118,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -136,7 +132,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -150,7 +145,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -164,7 +158,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc"
             },
@@ -178,7 +171,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-msvc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -193,7 +185,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-gcc"
             }
@@ -205,7 +196,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-gcc"
             }
@@ -217,7 +207,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-gcc"
             }
@@ -229,7 +218,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-gcc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -242,7 +230,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-clang"
             }
@@ -254,7 +241,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-clang"
             }
@@ -266,7 +252,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-clang"
             }
@@ -278,7 +263,6 @@
             ],
             "installDir": "${sourceDir}/build",
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-mingw-static-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "windows-x64-mingw-clang",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -290,7 +274,6 @@
                 "default-gcc"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-gcc"
             }
@@ -301,7 +284,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-gcc"
             }
@@ -312,7 +294,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-gcc"
             }
@@ -323,7 +304,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-gcc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -335,7 +315,6 @@
                 "default-gcc"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-gcc"
             }
@@ -346,7 +325,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-gcc"
             }
@@ -357,7 +335,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-gcc"
             }
@@ -368,7 +345,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-gcc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -380,7 +356,6 @@
                 "default-gcc"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc"
             }
@@ -391,7 +366,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc"
             }
@@ -402,7 +376,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc"
             }
@@ -413,7 +386,6 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -425,10 +397,9 @@
                 "default-gcc"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake"
             },
             "environment": {
                 "CC": "aarch64-linux-gnu-gcc",
@@ -441,10 +412,9 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake"
             },
             "environment": {
                 "CC": "aarch64-linux-gnu-gcc",
@@ -457,10 +427,9 @@
                 "default-gcc-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-gcc-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake",
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-gcc.cmake",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
             },
             "environment": {
@@ -474,7 +443,6 @@
                 "default-clang"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-clang"
             }
@@ -485,7 +453,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-clang"
             }
@@ -496,7 +463,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-clang"
             }
@@ -507,7 +473,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-x64-clang",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -519,7 +484,6 @@
                 "default-clang"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-clang"
             }
@@ -530,7 +494,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-clang"
             }
@@ -541,7 +504,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-clang"
             }
@@ -552,7 +514,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-linux-release-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-amd64-clang",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -564,7 +525,6 @@
                 "default-clang"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang"
             }
@@ -575,7 +535,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang"
             }
@@ -586,7 +545,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release-clang",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang"
             }
@@ -597,7 +555,6 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
@@ -609,10 +566,9 @@
                 "default-clang"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake"
             }
         },
         {
@@ -621,10 +577,9 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake"
             }
         },
         {
@@ -633,10 +588,9 @@
                 "default-clang-release"
             ],
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "arm64-linux-release-clang",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "linux-arm64-clang-cross",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake",
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/CMake/linux-arm64-clang.cmake",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"
             }
         },
@@ -651,7 +605,6 @@
                 "CPPFLAGS": "-I/usr/local/opt/llvm/include"
             },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-osx",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "osx-x64-clang"
             }
@@ -667,7 +620,6 @@
                 "CPPFLAGS": "-I/usr/local/opt/llvm/include"
             },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-osx-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "osx-x64-clang"
             }
@@ -683,7 +635,6 @@
                 "CPPFLAGS": "-I/usr/local/opt/llvm/include"
             },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-osx-release",
                 "ARCH": "native",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "osx-x64-clang"
             }
@@ -699,7 +650,6 @@
                 "CPPFLAGS": "-I/usr/local/opt/llvm/include"
             },
             "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-osx-release",
                 "ARCH": "default",
                 "SET_PACKAGE_OUTPUT_SUFFIX": "osx-x64-clang",
                 "SET_COMMIT_ID_IN_VERSION": "OFF"

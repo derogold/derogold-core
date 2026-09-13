@@ -19,6 +19,7 @@
 #include <cryptonotecore/Core.h>
 #include <cryptonotecore/DatabaseBlockchainCache.h>
 #include <cryptonotecore/CoreErrors.h>
+#include <cryptonotecore/DatabaseBlockchainCache.h>
 #include <cryptonotecore/CryptoNoteFormatUtils.h>
 #include <cryptonotecore/ITimeProvider.h>
 #include <cryptonotecore/Mixins.h>
@@ -60,9 +61,9 @@ namespace CryptoNote
             {
                 for (const auto &input : transaction.inputs)
                 {
-                    if (input.type() == typeid(KeyInput))
+                    if (std::holds_alternative<KeyInput>(input))
                     {
-                        auto inserted = alreadySpentKeyImages.insert(boost::get<KeyInput>(input).keyImage);
+                        auto inserted = alreadySpentKeyImages.insert(std::get<KeyInput>(input).keyImage);
                         if (!inserted.second)
                         {
                             return true;
@@ -135,9 +136,9 @@ namespace CryptoNote
 
             for (const auto &input : cryptonoteTransaction.inputs)
             {
-                if (input.type() == typeid(KeyInput))
+                if (std::holds_alternative<KeyInput>(input))
                 {
-                    const KeyInput &in = boost::get<KeyInput>(input);
+                    const KeyInput &in = std::get<KeyInput>(input);
                     bool r = spentOutputs.spentKeyImages.insert(in.keyImage).second;
                     if (r)
                     {
@@ -314,12 +315,22 @@ namespace CryptoNote
 
     bool Core::hasBlock(const Crypto::Hash &blockHash) const
     {
+        std::shared_lock lock(m_chainMutex);
+
+        return hasBlockUnsafe(blockHash);
+    }
+
+    bool Core::hasBlockUnsafe(const Crypto::Hash &blockHash) const
+    {
+        /* Assumes the caller holds m_chainMutex, shared or exclusive. */
         throwIfNotInitialized();
         return findSegmentContainingBlock(blockHash) != nullptr;
     }
 
     BlockTemplate Core::getBlockByIndex(uint32_t index) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(!chainsStorage.empty());
         assert(!chainsLeaves.empty());
         assert(index <= getTopBlockIndex());
@@ -333,6 +344,8 @@ namespace CryptoNote
 
     BlockTemplate Core::getBlockByHash(const Crypto::Hash &blockHash) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(!chainsStorage.empty());
         assert(!chainsLeaves.empty());
 
@@ -351,6 +364,8 @@ namespace CryptoNote
 
     std::vector<Crypto::Hash> Core::buildSparseChain() const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
         Crypto::Hash topBlockHash = chainsLeaves[0]->getTopBlockHash();
         return doBuildSparseChain(topBlockHash);
@@ -358,6 +373,8 @@ namespace CryptoNote
 
     std::vector<RawBlock> Core::getBlocks(uint32_t minIndex, uint32_t count) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(!chainsStorage.empty());
         assert(!chainsLeaves.empty());
 
@@ -402,6 +419,8 @@ namespace CryptoNote
         std::vector<RawBlock> &blocks,
         std::vector<Crypto::Hash> &missedHashes) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         for (const auto &hash : blockHashes)
@@ -459,6 +478,8 @@ namespace CryptoNote
         uint32_t &fullOffset,
         std::vector<BlockFullInfo> &entries) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(entries.empty());
         assert(!chainsLeaves.empty());
         assert(!chainsStorage.empty());
@@ -504,6 +525,8 @@ namespace CryptoNote
         uint32_t &fullOffset,
         std::vector<BlockShortInfo> &entries) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(entries.empty());
         assert(!chainsLeaves.empty());
         assert(!chainsStorage.empty());
@@ -566,6 +589,8 @@ namespace CryptoNote
         std::vector<BlockDetails> &entries,
         uint32_t blockCount) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(entries.empty());
         assert(!chainsLeaves.empty());
         assert(!chainsStorage.empty());
@@ -693,8 +718,11 @@ namespace CryptoNote
         const uint64_t blockCount,
         const bool skipCoinbaseTransactions,
         std::vector<WalletTypes::WalletBlockInfo> &walletBlocks,
-        std::optional<WalletTypes::TopBlock> &topBlockInfo) const
+        std::optional<WalletTypes::TopBlock> &topBlockInfo,
+        uint64_t &resolvedStartIndex) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         try
@@ -722,10 +750,21 @@ namespace CryptoNote
                 timestampBlockHeight = 0;
             }
 
-            /* If we couldn't get the first block timestamp, then the node is
-           synced less than the current height, so return no blocks till we're
-           synced. */
-            if (startTimestamp != 0 && !success)
+            /* The height of the last block we know about */
+            uint64_t lastKnownBlockHashHeight = static_cast<uint64_t>(findBlockchainSupplement(knownBlockHashes));
+
+            /* The chain does not reach the date asked for, so there is nothing
+               to send from a date. If the wallet also sent no block hashes it
+               has nothing else to go on and the top block is the whole answer.
+
+               This used to be decided before the block hashes were read at
+               all, which is what made it stick: a wallet whose scan start
+               could not be placed was served an empty "you are synced" on
+               every request, however far it had already got. It adopted the
+               top block, showed itself fully synced against the network, and
+               never saw a transaction - and only a reset, which starts from a
+               height instead of a date, got it out. */
+            if (startTimestamp != 0 && !success && lastKnownBlockHashHeight == 0)
             {
                 topBlockInfo = WalletTypes::TopBlock({currentHash, currentIndex});
                 return true;
@@ -734,9 +773,6 @@ namespace CryptoNote
             /* If a height was given, start from there, else convert the timestamp
            to a block */
             uint64_t firstBlockHeight = startHeight == 0 ? timestampBlockHeight : startHeight;
-
-            /* The height of the last block we know about */
-            uint64_t lastKnownBlockHashHeight = static_cast<uint64_t>(findBlockchainSupplement(knownBlockHashes));
 
             /* Start returning either from the start height, or the height of the
            last block we know about, whichever is higher */
@@ -769,6 +805,8 @@ namespace CryptoNote
                                        << "\n============================================="
                                        << "\n\n\n";
 
+            resolvedStartIndex = startIndex;
+
             /* If we're fully synced, then the start index will be greater than our
            current block. */
             if (currentIndex < startIndex)
@@ -800,6 +838,7 @@ namespace CryptoNote
 
                 walletBlock.blockHeight = cachedBlock.getBlockIndex();
                 walletBlock.blockHash = cachedBlock.getBlockHash();
+                walletBlock.blockPrevHash = block.previousBlockHash;
                 walletBlock.blockTimestamp = block.timestamp;
 
                 if (!skipCoinbaseTransactions)
@@ -815,12 +854,61 @@ namespace CryptoNote
                 walletBlocks.push_back(walletBlock);
             }
 
+            /* Serve the pruned range from the compact archive so a wallet can
+               sync from height 0 even on a pruned node.
+
+               The range is pruned only if the persisted prune floor says so. A
+               gap between startIndex and the first returned block is NOT
+               evidence of pruning: with skipCoinbaseTransactions the daemon
+               deliberately skips empty blocks, so that gap is the normal case
+               on a sparse chain. Inferring a prune from it made unpruned
+               daemons throw away real blocks and serve rebuilt records for
+               every empty height instead. */
+            uint64_t pruneFloor = 0;
+
+            {
+                const uint64_t persistedFloor = mainChain->getPruneFloor();
+
+                if (persistedFloor > startIndex)
+                {
+                    pruneFloor = persistedFloor;
+                }
+            }
+
+            if (pruneFloor > 0)
+            {
+                /* Limit prunedItems to the same batch size used for raw blocks
+                   to avoid generating millions of records in a single response. */
+                const uint64_t prunedEnd = std::min(pruneFloor, startIndex + actualBlockCount);
+                auto prunedItems = getPrunedWalletBlocks(startIndex, prunedEnd, skipCoinbaseTransactions);
+                if (!prunedItems.empty())
+                {
+                    /* Replace walletBlocks with prunedItems only — do NOT mix pruned
+                       blocks with raw blocks in the same response. If we prepended and
+                       also kept the raw blocks, the wallet would jump from the last
+                       prunedItem directly to the first raw block, creating a height gap
+                       of potentially hundreds of thousands of blocks and leaving the
+                       middle of the pruned range unscanned. By returning prunedItems
+                       alone the wallet iterates through the pruned range 100 blocks at
+                       a time and naturally transitions into the non-pruned range when
+                       startIndex reaches pruneFloor. */
+                    walletBlocks = std::move(prunedItems);
+                }
+            }
+
             if (walletBlocks.empty())
             {
                 topBlockInfo = WalletTypes::TopBlock({currentHash, currentIndex});
             }
 
             return true;
+        }
+        /* Says something the caller can act on - the wallet is on another
+           chain - rather than "try again", which is all a false return can
+           mean. Rethrown for the RPC layer to turn into an answer. */
+        catch (const NoCommonAncestorError &)
+        {
+            throw;
         }
         catch (std::exception &e)
         {
@@ -839,8 +927,11 @@ namespace CryptoNote
         const uint64_t blockCount,
         const bool skipCoinbaseTransactions,
         std::vector<RawBlock> &blocks,
-        std::optional<WalletTypes::TopBlock> &topBlockInfo) const
+        std::optional<WalletTypes::TopBlock> &topBlockInfo,
+        uint64_t &resolvedStartIndex) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         try
@@ -868,10 +959,21 @@ namespace CryptoNote
                 timestampBlockHeight = 0;
             }
 
-            /* If we couldn't get the first block timestamp, then the node is
-           synced less than the current height, so return no blocks till we're
-           synced. */
-            if (startTimestamp != 0 && !success)
+            /* The height of the last block we know about */
+            uint64_t lastKnownBlockHashHeight = static_cast<uint64_t>(findBlockchainSupplement(knownBlockHashes));
+
+            /* The chain does not reach the date asked for, so there is nothing
+               to send from a date. If the wallet also sent no block hashes it
+               has nothing else to go on and the top block is the whole answer.
+
+               This used to be decided before the block hashes were read at
+               all, which is what made it stick: a wallet whose scan start
+               could not be placed was served an empty "you are synced" on
+               every request, however far it had already got. It adopted the
+               top block, showed itself fully synced against the network, and
+               never saw a transaction - and only a reset, which starts from a
+               height instead of a date, got it out. */
+            if (startTimestamp != 0 && !success && lastKnownBlockHashHeight == 0)
             {
                 topBlockInfo = WalletTypes::TopBlock({currentHash, currentIndex});
                 return true;
@@ -880,9 +982,6 @@ namespace CryptoNote
             /* If a height was given, start from there, else convert the timestamp
            to a block */
             uint64_t firstBlockHeight = startHeight == 0 ? timestampBlockHeight : startHeight;
-
-            /* The height of the last block we know about */
-            uint64_t lastKnownBlockHashHeight = static_cast<uint64_t>(findBlockchainSupplement(knownBlockHashes));
 
             /* Start returning either from the start height, or the height of the
            last block we know about, whichever is higher */
@@ -915,6 +1014,12 @@ namespace CryptoNote
                                        << "\n============================================="
                                        << "\n\n\n";
 
+            /* Report the checkpoint-resolved start back to the caller so the RPC
+               handler can correctly detect prune gaps (comparing against the raw
+               startHeight would falsely trigger prune floor detection when the
+               checkpoint mechanism advanced past startHeight). */
+            resolvedStartIndex = startIndex;
+
             /* If we're fully synced, then the start index will be greater than our
            current block. */
             if (currentIndex < startIndex)
@@ -939,10 +1044,72 @@ namespace CryptoNote
 
             return true;
         }
+        /* Says something the caller can act on - the wallet is on another
+           chain - rather than "try again", which is all a false return can
+           mean. Rethrown for the RPC layer to turn into an answer. */
+        catch (const NoCommonAncestorError &)
+        {
+            throw;
+        }
         catch (std::exception &e)
         {
             logger(Logging::ERROR) << "Failed to get wallet sync data: " << e.what();
             return false;
+        }
+    }
+
+    std::vector<WalletTypes::WalletBlockInfo> Core::getPrunedWalletBlocks(
+        uint64_t startHeight,
+        uint64_t endHeight,
+        bool skipCoinbaseTransactions) const
+    {
+        throwIfNotInitialized();
+
+        try
+        {
+            IBlockchainCache *mainChain = chainsLeaves[0];
+
+            /* Only DatabaseBlockchainCache supports pruned wallet block construction */
+            auto *dbChain = dynamic_cast<DatabaseBlockchainCache *>(mainChain);
+            if (dbChain == nullptr)
+            {
+                logger(Logging::WARNING) << "getPrunedWalletBlocks: mainChain is not DatabaseBlockchainCache";
+                return {};
+            }
+
+            auto result = dbChain->getPrunedWalletBlocks(startHeight, endHeight, skipCoinbaseTransactions);
+
+            logger(Logging::DEBUGGING) << "getPrunedWalletBlocks [" << startHeight << ", " << endHeight
+                                       << "): returned " << result.size() << " blocks";
+
+            return result;
+        }
+        catch (const std::exception &e)
+        {
+            logger(Logging::WARNING) << "getPrunedWalletBlocks [" << startHeight << ", " << endHeight
+                                     << ") failed: " << e.what();
+            return {};
+        }
+    }
+
+    uint64_t Core::getMinRawBlockHeight(uint64_t fromHeight) const
+    {
+        throwIfNotInitialized();
+
+        try
+        {
+            IBlockchainCache *mainChain = chainsLeaves[0];
+            auto *dbChain = dynamic_cast<DatabaseBlockchainCache *>(mainChain);
+            if (dbChain == nullptr)
+            {
+                return fromHeight;
+            }
+            return dbChain->getMinRawBlockHeight(fromHeight);
+        }
+        catch (const std::exception &e)
+        {
+            logger(Logging::WARNING) << "getMinRawBlockHeight failed: " << e.what();
+            return fromHeight;
         }
     }
 
@@ -962,7 +1129,7 @@ namespace CryptoNote
             WalletTypes::KeyOutput keyOutput;
 
             keyOutput.amount = output.amount;
-            keyOutput.key = boost::get<CryptoNote::KeyOutput>(output.target).key;
+            keyOutput.key = std::get<CryptoNote::KeyOutput>(output.target).key;
 
             transaction.keyOutputs.push_back(keyOutput);
         }
@@ -999,7 +1166,7 @@ namespace CryptoNote
             WalletTypes::KeyOutput keyOutput;
 
             keyOutput.amount = output.amount;
-            keyOutput.key = boost::get<CryptoNote::KeyOutput>(output.target).key;
+            keyOutput.key = std::get<CryptoNote::KeyOutput>(output.target).key;
 
             transaction.keyOutputs.push_back(keyOutput);
         }
@@ -1007,7 +1174,7 @@ namespace CryptoNote
         /* Simplify the inputs */
         for (const auto &input : t.inputs)
         {
-            transaction.keyInputs.push_back(boost::get<CryptoNote::KeyInput>(input));
+            transaction.keyInputs.push_back(std::get<CryptoNote::KeyInput>(input));
         }
 
         return transaction;
@@ -1036,6 +1203,8 @@ namespace CryptoNote
         std::vector<BinaryArray> &transactions,
         std::vector<Crypto::Hash> &missedHashes) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(!chainsLeaves.empty());
         assert(!chainsStorage.empty());
         throwIfNotInitialized();
@@ -1132,6 +1301,8 @@ namespace CryptoNote
         uint32_t &totalBlockCount,
         uint32_t &startBlockIndex) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         assert(!remoteBlockIds.empty());
         assert(remoteBlockIds.back() == getBlockHashByIndex(0));
         throwIfNotInitialized();
@@ -1144,6 +1315,8 @@ namespace CryptoNote
 
     std::error_code Core::addBlock(const CachedBlock &cachedBlock, RawBlock &&rawBlock)
     {
+        std::unique_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
         uint32_t blockIndex = cachedBlock.getBlockIndex();
         Crypto::Hash blockHash = cachedBlock.getBlockHash();
@@ -1152,7 +1325,8 @@ namespace CryptoNote
         std::string blockStr = os.str();
 
         logger(Logging::DEBUGGING) << "Request to add block " << blockStr;
-        if (hasBlock(cachedBlock.getBlockHash()))
+        /* We hold m_chainMutex exclusively already, and it is not recursive. */
+        if (hasBlockUnsafe(cachedBlock.getBlockHash()))
         {
             logger(Logging::DEBUGGING) << "Block " << blockStr << " already exists";
             return error::AddBlockErrorCode::ALREADY_EXISTS;
@@ -1432,6 +1606,24 @@ namespace CryptoNote
         {
             logger(Logging::DEBUGGING) << "Resolving: " << blockStr;
 
+            /* A reorg that reaches below the prune floor cannot be resolved,
+               because splitting the chain there needs the raw blocks this node
+               deleted. Reject the block cleanly instead of letting an
+               out_of_range escape addBlock, which unwound all the way to the
+               connection handler and dropped the peer with no explanation.
+               Nothing has been mutated at this point, so returning here leaves
+               the chain untouched. */
+            const uint32_t pruneFloor = cache->getPruneFloor();
+
+            if (pruneFloor > 0 && previousBlockIndex + 1 < pruneFloor)
+            {
+                logger(Logging::WARNING)
+                    << "Cannot resolve fork at height " << (previousBlockIndex + 1)
+                    << ": raw blocks below the prune floor (" << pruneFloor << ") are not available on this node.";
+
+                return error::AddBlockErrorCode::REJECTED_AS_ORPHANED;
+            }
+
             auto upperSegment = cache->split(previousBlockIndex + 1);
             //[cache] is lower segment now
 
@@ -1668,6 +1860,8 @@ namespace CryptoNote
         std::vector<uint32_t> &globalIndexes,
         std::vector<Crypto::PublicKey> &publicKeys) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         if (count == 0)
@@ -1739,6 +1933,8 @@ namespace CryptoNote
         const uint64_t endHeight,
         std::unordered_map<Crypto::Hash, std::vector<uint64_t>> &indexes) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         try
@@ -1747,18 +1943,62 @@ namespace CryptoNote
 
             std::vector<Crypto::Hash> transactionHashes;
 
-            for (const auto& rawBlock : mainChain->getBlocksByHeight(startHeight, endHeight))
+            /* Split the range at the prune floor rather than choosing one path
+               for the whole thing. The pruned path used to run only when the
+               range held no raw blocks at all, so a range straddling the floor
+               took the normal path and silently returned nothing for the pruned
+               side. That is not a rare case: the wallet asks for a fixed window
+               around each block it scans, and the floor advances continuously,
+               so there is always a window sitting across it. */
+            const uint64_t pruneFloor = mainChain->getPruneFloor();
+
+            const uint64_t prunedEnd = std::min<uint64_t>(endHeight, pruneFloor);
+
+            if (pruneFloor > startHeight && prunedEnd > startHeight)
             {
-                for (const auto& transaction : rawBlock.transactions)
+                /* Pruned part of the range: raw blocks are gone, so read the
+                   transaction hashes from the compact archive, which survives
+                   pruning. */
+                auto *dbChain = dynamic_cast<DatabaseBlockchainCache *>(mainChain);
+
+                if (dbChain != nullptr)
                 {
-                    transactionHashes.push_back(getBinaryArrayHash(transaction));
+                    auto prunedBlocks = dbChain->getPrunedWalletBlocks(startHeight, prunedEnd, false);
+
+                    for (const auto &wb : prunedBlocks)
+                    {
+                        if (wb.coinbaseTransaction)
+                        {
+                            transactionHashes.push_back(wb.coinbaseTransaction->hash);
+                        }
+
+                        for (const auto &tx : wb.transactions)
+                        {
+                            transactionHashes.push_back(tx.hash);
+                        }
+                    }
                 }
+            }
 
-                BlockTemplate block;
+            const uint64_t rawStart = std::max<uint64_t>(startHeight, pruneFloor);
 
-                fromBinaryArray(block, rawBlock.block);
+            if (endHeight > rawStart)
+            {
+                /* Unpruned part of the range: take the hashes from the blocks
+                   themselves. */
+                for (const auto &rawBlock : mainChain->getBlocksByHeight(rawStart, endHeight))
+                {
+                    for (const auto &transaction : rawBlock.transactions)
+                    {
+                        transactionHashes.push_back(getBinaryArrayHash(transaction));
+                    }
 
-                transactionHashes.push_back(getBinaryArrayHash(toBinaryArray(block.baseTransaction)));
+                    BlockTemplate block;
+
+                    fromBinaryArray(block, rawBlock.block);
+
+                    transactionHashes.push_back(getBinaryArrayHash(toBinaryArray(block.baseTransaction)));
+                }
             }
 
             indexes = mainChain->getGlobalIndexes(transactionHashes);
@@ -1928,6 +2168,8 @@ namespace CryptoNote
         uint64_t &difficulty,
         uint32_t &height)
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         height = getTopBlockIndex() + 1;
@@ -1942,7 +2184,7 @@ namespace CryptoNote
             return {false, error};
         }
 
-        b = boost::value_initialized<BlockTemplate>();
+        b = BlockTemplate {};
         b.majorVersion = getBlockMajorVersionForHeight(height);
 
         if (b.majorVersion == BLOCK_MAJOR_VERSION_1)
@@ -1967,7 +2209,7 @@ namespace CryptoNote
             b.parentBlock.majorVersion = BLOCK_MINOR_VERSION_0;
             b.parentBlock.transactionCount = 1;
 
-            TransactionExtraMergeMiningTag mmTag = boost::value_initialized<decltype(mmTag)>();
+            TransactionExtraMergeMiningTag mmTag = decltype(mmTag) {};
 
             if (!appendMergeMiningTagToExtra(b.parentBlock.baseTransaction.extra, mmTag))
             {
@@ -2180,6 +2422,8 @@ namespace CryptoNote
 
     size_t Core::getBlockchainTransactionCount() const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
         IBlockchainCache *mainChain = chainsLeaves[0];
         return mainChain->getTransactionCount();
@@ -2187,6 +2431,8 @@ namespace CryptoNote
 
     size_t Core::getAlternativeBlockCount() const
     {
+        std::shared_lock lock(m_chainMutex);
+
         throwIfNotInitialized();
 
         using Ptr = decltype(chainsStorage)::value_type;
@@ -2285,7 +2531,8 @@ namespace CryptoNote
             }
         }
 
-        throw std::runtime_error("Genesis block hash was not found.");
+        /* Not one of them is on this chain. */
+        throw NoCommonAncestorError();
     }
 
     std::vector<Crypto::Hash> CryptoNote::Core::getBlockHashes(uint32_t startBlockIndex, uint32_t maxCount) const
@@ -2324,24 +2571,24 @@ namespace CryptoNote
             }
         }
 
-	uint64_t futureTimeLimit;
+        /* Six blocks' worth of time at the rate in force here. The ladder
+           this replaces had its lower two rungs the wrong way round: heights
+           between DIFFICULTY_TARGET_V2_HEIGHT and DIFFICULTY_TARGET_V3_HEIGHT
+           were allowed 60 seconds ahead of now when their block time says 120,
+           and the heights below them 120 when theirs says 60.
 
-        if (previousBlockIndex + 1 >= CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT)
-        {
-            futureTimeLimit = CryptoNote::parameters::DIFFICULTY_TARGET_V3 * 6;
-						        }
-        else if (previousBlockIndex + 1 >= CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT)        
-        {
-            futureTimeLimit = CryptoNote::parameters::DIFFICULTY_TARGET * 6;
-        }
-        else
-        {
-            futureTimeLimit = CryptoNote::parameters::DIFFICULTY_TARGET_V2 * 6;
-        }
+           Putting them back cannot change which blocks this chain accepts. The
+           comparison is against the clock at validation time, and every height
+           below DIFFICULTY_TARGET_V3_HEIGHT was mined years ago, so no
+           timestamp down there is ahead of now by either figure. Only the V3
+           rung is live, and that one was already right. */
+        const uint64_t futureTimeLimit =
+            CryptoNote::parameters::getCurrentDifficultyTarget(previousBlockIndex + 1) * 6;
 
-	if (block.timestamp > getAdjustedTime() + futureTimeLimit) {
-		return error::BlockValidationError::TIMESTAMP_TOO_FAR_IN_FUTURE;
-	}
+        if (block.timestamp > getAdjustedTime() + futureTimeLimit)
+        {
+            return error::BlockValidationError::TIMESTAMP_TOO_FAR_IN_FUTURE;
+        }
 
 	auto timestamps = cache->getLastTimestamps(currency.timestampCheckWindow(previousBlockIndex+1), previousBlockIndex, addGenesisBlock);
 	if (timestamps.size() >= currency.timestampCheckWindow(previousBlockIndex+1)) {
@@ -2367,12 +2614,12 @@ namespace CryptoNote
             return error::TransactionValidationError::INPUT_WRONG_COUNT;
         }
 
-        if (block.baseTransaction.inputs[0].type() != typeid(BaseInput))
+        if (!std::holds_alternative<BaseInput>(block.baseTransaction.inputs[0]))
         {
             return error::TransactionValidationError::INPUT_UNEXPECTED_TYPE;
         }
 
-        if (boost::get<BaseInput>(block.baseTransaction.inputs[0]).blockIndex != previousBlockIndex + 1)
+        if (std::get<BaseInput>(block.baseTransaction.inputs[0]).blockIndex != previousBlockIndex + 1)
         {
             return error::TransactionValidationError::BASE_INPUT_WRONG_BLOCK_INDEX;
         }
@@ -2402,9 +2649,9 @@ namespace CryptoNote
                 return error::TransactionValidationError::OUTPUT_ZERO_AMOUNT;
             }
 
-            if (output.target.type() == typeid(KeyOutput))
+            if (std::holds_alternative<KeyOutput>(output.target))
             {
-                if (!check_key(boost::get<KeyOutput>(output.target).key))
+                if (!check_key(std::get<KeyOutput>(output.target).key))
                 {
                     return error::TransactionValidationError::OUTPUT_INVALID_KEY;
                 }
@@ -3340,7 +3587,8 @@ namespace CryptoNote
         {
             IBlockchainCache *segment = findMainChainSegmentContainingBlock(blockIndex);
             Crypto::Hash blockHash = segment->getBlockHash(blockIndex);
-            BlockDetails block = getBlockDetails(blockHash);
+            /* queryBlocksDetailed, our only caller, already holds m_chainMutex. */
+            BlockDetails block = getBlockDetailsInternal(blockHash);
             entries.emplace_back(std::move(block));
         }
     }
@@ -3637,6 +3885,8 @@ namespace CryptoNote
 
     BlockDetails Core::getBlockDetails(const uint32_t blockHeight, const uint32_t attempt) const
     {
+        std::shared_lock lock(m_chainMutex);
+
         if (attempt > 10)
         {
             throw std::runtime_error("Requested block height wasn't found in blockchain.");
@@ -3652,11 +3902,16 @@ namespace CryptoNote
 
         try
         {
-            return getBlockDetails(segment->getBlockHash(blockHeight));
+            return getBlockDetailsInternal(segment->getBlockHash(blockHeight));
         }
         catch (const std::out_of_range &e)
         {
             logger(Logging::INFO) << "Failed to get block details, mid chain reorg";
+
+            /* Drop the lock before waiting. The reorg this is waiting out is a
+               writer, so holding a reader across the sleep would keep it from
+               ever happening and every attempt would fail the same way. */
+            lock.unlock();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             return getBlockDetails(blockHeight, attempt+1);
@@ -3665,6 +3920,14 @@ namespace CryptoNote
 
     BlockDetails Core::getBlockDetails(const Crypto::Hash &blockHash) const
     {
+        std::shared_lock lock(m_chainMutex);
+
+        return getBlockDetailsInternal(blockHash);
+    }
+
+    BlockDetails Core::getBlockDetailsInternal(const Crypto::Hash &blockHash) const
+    {
+        /* Assumes the caller holds m_chainMutex, shared or exclusive. */
         throwIfNotInitialized();
 
         IBlockchainCache *segment = findSegmentContainingBlock(blockHash);
@@ -3870,7 +4133,7 @@ namespace CryptoNote
             }
         }
 
-        transactionDetails.paymentId = boost::value_initialized<Crypto::Hash>();
+        transactionDetails.paymentId = Crypto::Hash {};
         if (transaction->getPaymentId(transactionDetails.paymentId))
         {
             transactionDetails.hasPaymentId = true;
@@ -3889,14 +4152,14 @@ namespace CryptoNote
             if (transaction->getInputType(i) == TransactionTypes::InputType::Generating)
             {
                 BaseInputDetails baseDetails;
-                baseDetails.input = boost::get<BaseInput>(rawTransaction.inputs[i]);
+                baseDetails.input = std::get<BaseInput>(rawTransaction.inputs[i]);
                 baseDetails.amount = transaction->getOutputTotalAmount();
                 txInDetails = baseDetails;
             }
             else if (transaction->getInputType(i) == TransactionTypes::InputType::Key)
             {
                 KeyInputDetails txInToKeyDetails;
-                txInToKeyDetails.input = boost::get<KeyInput>(rawTransaction.inputs[i]);
+                txInToKeyDetails.input = std::get<KeyInput>(rawTransaction.inputs[i]);
                 std::vector<std::pair<Crypto::Hash, size_t>> outputReferences;
                 outputReferences.reserve(txInToKeyDetails.input.outputIndexes.size());
                 std::vector<uint32_t> globalIndexes =
@@ -3913,7 +4176,7 @@ namespace CryptoNote
                 txInDetails = txInToKeyDetails;
             }
 
-            assert(!txInDetails.empty());
+            assert(!txInDetails.valueless_by_exception());
             transactionDetails.inputs.push_back(std::move(txInDetails));
         }
 

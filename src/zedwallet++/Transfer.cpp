@@ -12,8 +12,8 @@
 #include <utilities/ColouredMsg.h>
 #include <utilities/FormatTools.h>
 #include <utilities/Input.h>
-#include <zedwallet++/Fusion.h>
 #include <zedwallet++/GetInput.h>
+#include <zedwallet++/Sweep.h>
 #include <zedwallet++/Utilities.h>
 
 namespace
@@ -24,26 +24,12 @@ namespace
     }
 } // namespace
 
-void transfer(const std::shared_ptr<WalletBackend> walletBackend, const bool sendAll)
+void transfer(const std::shared_ptr<WalletBackend> walletBackend)
 {
     std::cout << InformationMsg("Note: You can type cancel at any time to "
                                 "cancel the transaction\n\n");
 
     const bool integratedAddressesAllowed(true), cancelAllowed(true);
-
-    const auto unlockedBalance = walletBackend->getTotalUnlockedBalance();
-
-    if (sendAll && unlockedBalance <= WalletConfig::minimumSend)
-    {
-        std::stringstream stream;
-
-        stream << "The minimum send allowed is " << Utilities::formatAmount(WalletConfig::minimumSend)
-               << ", but you have " << Utilities::formatAmount(unlockedBalance) << "!\n";
-
-        std::cout << WarningMsg(stream.str());
-
-        return cancel();
-    }
 
     std::string address =
         getAddress("What address do you want to transfer to?: ", integratedAddressesAllowed, cancelAllowed);
@@ -74,29 +60,15 @@ void transfer(const std::shared_ptr<WalletBackend> walletBackend, const bool sen
         std::cout << "\n";
     }
 
-    /* nodeFee will be zero if using a node without a fee, so we can add this
-       safely */
-    const auto [nodeFee, nodeAddress] = walletBackend->getNodeFee();
+    const auto [success, amount] =
+        getAmountToAtomic("How much " + WalletConfig::ticker + " do you want to send?: ", cancelAllowed);
 
-    const uint64_t fee = WalletConfig::defaultFee;
+    std::cout << "\n";
 
-    /* Default amount if we're sending everything */
-    uint64_t amount = unlockedBalance - nodeFee - fee;
-
-    if (!sendAll)
+    if (!success)
     {
-        bool success;
-
-        std::tie(success, amount) =
-            getAmountToAtomic("How much " + WalletConfig::ticker + " do you want to send?: ", cancelAllowed);
-
-        std::cout << "\n";
-
-        if (!success)
-        {
-            cancel();
-            return;
-        }
+        cancel();
+        return;
     }
 
     sendTransaction(walletBackend, address, amount, paymentID);
@@ -146,25 +118,24 @@ void sendTransaction(
     {
         std::cout << WarningMsg("Your transaction is too large to be accepted "
                                 "by the network!\n")
-                  << InformationMsg("We're attempting to optimize your wallet,\n"
-                                    "which hopefully make the transaction small "
-                                    "enough to fit in a block.\n"
-                                    "Please wait, this will take some time...\n\n");
+                  << InformationMsg("It can be sent as several smaller transactions "
+                                    "instead.\n")
+                  << WarningMsg("You will pay the network fee, and any node fee, once\n"
+                                "for each of them, so this costs more than a single\n"
+                                "transfer, and your balance may not cover it.\n");
 
-        /* Try and perform some fusion transactions to make our inputs bigger */
-        optimize(walletBackend);
-
-        /* Resend the transaction */
-        std::tie(error, hash) = walletBackend->sendTransactionBasic(address, amount, paymentID);
-
-        /* Still too big, split it up (with users approval) */
-        if (error == TOO_MANY_INPUTS_TO_FIT_IN_BLOCK)
+        if (!Utilities::confirm("Do you want to split it up?"))
         {
-            splitTX(walletBackend, address, amount, paymentID);
-            cancel();
-
-            return;
+            return cancel();
         }
+
+        /* The amount is what the destination receives and the fees are paid on
+           top of it, the same as the transfer we just tried to send */
+        const bool feeFromAmount = false;
+
+        sendInChunks(walletBackend, address, paymentID, amount, feeFromAmount);
+
+        return;
     }
 
     if (error)
@@ -175,131 +146,6 @@ void sendTransaction(
     else
     {
         std::cout << SuccessMsg("Transaction has been sent!\nHash: ") << SuccessMsg(hash) << "\n";
-    }
-}
-
-void splitTX(
-    const std::shared_ptr<WalletBackend> walletBackend,
-    const std::string address,
-    const uint64_t amount,
-    const std::string paymentID)
-{
-    std::cout << InformationMsg("Transaction is still too large to send, splitting into "
-                                "multiple chunks.\n\n")
-              << WarningMsg("It will slightly raise the fee you have to pay,\n"
-                            "and hence reduce the total amount you can send if\n"
-                            "your balance cannot cover it.\n\n"
-                            "If the node you are using charges a fee,\nyou will "
-                            "have to pay this fee for each transction.\n");
-
-    if (!Utilities::confirm("Is this OK?"))
-    {
-        cancel();
-        return;
-    }
-
-    uint64_t unlockedBalance = walletBackend->getTotalUnlockedBalance();
-
-    uint64_t totalAmount = amount;
-    uint64_t sentAmount = 0;
-    uint64_t remainder = totalAmount - sentAmount;
-
-    /* How much to split the remaining balance to be sent into each individual
-       transaction. If it's 1, then we'll attempt to send the full amount,
-       if it's 2, we'll send half, and so on. */
-    uint64_t amountDivider = 1;
-
-    int txNumber = 1;
-
-    const auto [nodeFee, nodeAddress] = walletBackend->getNodeFee();
-
-    while (true)
-    {
-        uint64_t splitAmount = remainder / amountDivider;
-
-        /* If we have odd numbers, we can have an amount that is smaller
-           than the remainder to send, but the remainder is less than
-           2 * amount.
-           So, we include this amount in our current transaction to prevent
-           this change not being sent.
-           If we're trying to send more than the remaining amount, set to
-           the remaining amount. */
-        if (splitAmount != remainder && remainder < (splitAmount * 2))
-        {
-            splitAmount = remainder;
-        }
-
-        uint64_t totalNeeded = splitAmount + WalletConfig::minimumFee + nodeFee;
-
-        /* Don't have enough to cover the full transfer, just send as much
-           as we can (deduct fees which will be added later) */
-        if (totalNeeded > unlockedBalance)
-        {
-            totalNeeded = unlockedBalance - WalletConfig::minimumFee - nodeFee;
-            splitAmount = totalNeeded - WalletConfig::minimumFee + nodeFee;
-        }
-
-        if (splitAmount < WalletConfig::minimumSend)
-        {
-            std::cout << WarningMsg("Failed to split up transaction, sorry.\n");
-            return;
-        }
-
-        /* Balance is going to get locked as we send, wait for it to unlock
-           and then send */
-        while (walletBackend->getTotalUnlockedBalance() < totalNeeded)
-        {
-            std::cout << WarningMsg("Waiting for balance to unlock to send "
-                                    "next transaction.\n"
-                                    "Will try again in 15 seconds...\n\n");
-
-            std::this_thread::sleep_for(std::chrono::seconds(15));
-        }
-
-        const auto [error, hash] = walletBackend->sendTransactionBasic(address, splitAmount, paymentID);
-
-        /* Still too big, reduce amount */
-        if (error == TOO_MANY_INPUTS_TO_FIT_IN_BLOCK)
-        {
-            amountDivider *= 2;
-
-            /* This can take quite a long time getting mixins each time
-               so let them know it's not frozen */
-            std::cout << InformationMsg("Working...\n");
-
-            continue;
-        }
-        else if (error)
-        {
-            std::cout << WarningMsg("Failed to send transaction: ") << error << "\nAborting, sorry...";
-            return;
-        }
-
-        std::stringstream stream;
-
-        stream << "Transaction number " << txNumber << " has been sent!\nHash: " << hash
-               << "\nAmount: " << Utilities::formatAmount(splitAmount) << "\n\n";
-
-        std::cout << SuccessMsg(stream.str()) << std::endl;
-
-        txNumber++;
-
-        sentAmount += splitAmount;
-
-        /* Remember to remove the fee and node fee as well from balance */
-        unlockedBalance -= splitAmount - WalletConfig::minimumFee - nodeFee;
-
-        remainder = totalAmount - sentAmount;
-
-        /* We've sent the full amount required now */
-        if (sentAmount == totalAmount)
-        {
-            std::cout << InformationMsg("All transactions have been sent!\n");
-            return;
-        }
-
-        /* Went well, revert to original divider */
-        amountDivider = 1;
     }
 }
 

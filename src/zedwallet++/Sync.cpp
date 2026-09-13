@@ -7,12 +7,31 @@
 #include <zedwallet++/Sync.h>
 /////////////////////////////
 
+#include <chrono>
 #include <common/SignalHandler.h>
 #include <config/WalletConfig.h>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
+#include <tuple>
 #include <utilities/ColouredMsg.h>
+#include <utilities/FormatTools.h>
 #include <zedwallet++/CommandImplementations.h>
+
+namespace
+{
+    /* Return current local time as "YYYY-MM-DD HH:MM:SS" */
+    std::string nowTimestamp()
+    {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t = std::chrono::system_clock::to_time_t(now);
+        char buf[20];
+        std::strftime(buf, sizeof(buf), "%F %T", std::localtime(&t));
+        return std::string(buf);
+    }
+} // anonymous namespace
 
 void syncWallet(const std::shared_ptr<WalletBackend> walletBackend)
 {
@@ -59,11 +78,48 @@ void syncWallet(const std::shared_ptr<WalletBackend> walletBackend)
     /* Amount of times we have looped without getting any new blocks */
     uint32_t stuckCounter = 0;
 
+    /* Whether we have already shown the prune floor warning this session */
+    bool shownPruneWarning = false;
+
     while (walletBlockCount < localDaemonBlockCount)
     {
-        auto [tmpWalletBlockCount, localDaemonBlockCount, networkBlockCount] = walletBackend->getSyncStatus();
+        /* Update the outer variables rather than declaring new ones. A
+           structured binding here shadowed localDaemonBlockCount, so the loop
+           condition kept testing the value read before the loop started and the
+           foreground sync stopped at whatever height the daemon had on entry. */
+        const auto syncStatus = walletBackend->getSyncStatus();
 
-        std::cout << SuccessMsg(tmpWalletBlockCount) << " of " << InformationMsg(localDaemonBlockCount) << std::endl;
+        const uint64_t tmpWalletBlockCount = std::get<0>(syncStatus);
+
+        localDaemonBlockCount = std::get<1>(syncStatus);
+        networkBlockCount = std::get<2>(syncStatus);
+
+        /* Show a one-time warning when the daemon's prune floor is detected.
+           Raw block data below the prune floor is not available, so transactions
+           in that range cannot be detected. Sync continues from the prune floor. */
+        if (!shownPruneWarning)
+        {
+            const uint64_t pruneFloor = walletBackend->getPruneFloor();
+
+            if (pruneFloor > 0)
+            {
+                shownPruneWarning = true;
+
+                std::cout << WarningMsg(
+                    "\nNote: This daemon has pruned raw block data below height " +
+                    std::to_string(pruneFloor) + ".\n"
+                    "Blocks 0 to " + std::to_string(pruneFloor - 1) +
+                    " are synced from the daemon's compact archive.\n"
+                    "If that archive predates this daemon version it may not carry the\n"
+                    "output indexes needed to spend those inputs. Balances shown for that\n"
+                    "range are correct either way; re-sync against a node holding the full\n"
+                    "chain if a spend reports insufficient funds.\n")
+                    << std::endl;
+            }
+        }
+
+        std::cout << "[" << nowTimestamp() << "] "
+                  << SuccessMsg(tmpWalletBlockCount) << " of " << InformationMsg(localDaemonBlockCount) << std::endl;
 
         if (walletBlockCount == tmpWalletBlockCount)
         {
@@ -75,21 +131,38 @@ void syncWallet(const std::shared_ptr<WalletBackend> walletBackend)
         }
 
         /* Get any transactions in between the previous height and the new
-           height */
+           height — display as compact one-liners during sync */
         for (const auto &tx : walletBackend->getTransactionsRange(walletBlockCount, tmpWalletBlockCount))
         {
             /* Don't print out fusion transactions */
             if (!tx.isFusionTransaction())
             {
-                std::cout << InformationMsg("\nNew transaction found!\n\n");
+                std::stringstream txStream;
 
                 if (tx.totalAmount() < 0)
                 {
-                    printOutgoingTransfer(tx);
+                    const int64_t amount = std::abs(tx.totalAmount());
+                    txStream << "[" << nowTimestamp() << "] OUT "
+                        << Utilities::formatAmount(amount) << " (fee " << Utilities::formatAmount(tx.fee)
+                        << ") | height " << tx.blockHeight
+                        << " | tx: " << tx.hash;
+                    if (!tx.paymentID.empty())
+                    {
+                        txStream << " | payment id: " << tx.paymentID;
+                    }
+                    std::cout << WarningMsg(txStream.str()) << std::endl;
                 }
                 else
                 {
-                    printIncomingTransfer(tx);
+                    txStream << "[" << nowTimestamp() << "] IN  "
+                        << Utilities::formatAmount(tx.totalAmount())
+                        << " | height " << tx.blockHeight
+                        << " | tx: " << tx.hash;
+                    if (!tx.paymentID.empty())
+                    {
+                        txStream << " | payment id: " << tx.paymentID;
+                    }
+                    std::cout << SuccessMsg(txStream.str()) << std::endl;
                 }
             }
         }

@@ -13,7 +13,6 @@
 #include "cryptonotecore/Currency.h"
 #include "p2p/LevinProtocol.h"
 
-#include <boost/uuid/uuid_io.hpp>
 #include <chrono>
 #include <config/Ascii.h>
 #include <config/CryptoNoteConfig.h>
@@ -33,6 +32,22 @@ namespace CryptoNote
 {
     namespace
     {
+        /* Hard bounds on --block-sync-bytes. Below the minimum a single large
+           block could not be fetched at all; above the maximum the reply would
+           not fit in one P2P packet, so the transport would cut it short. */
+        constexpr uint64_t SYNC_BLOCK_BUDGET_MIN_BYTES = 2 * 1024 * 1024;
+        constexpr uint64_t SYNC_BLOCK_BUDGET_MAX_BYTES = 48 * 1024 * 1024;
+
+        /* How much work each batch aims to be, in seconds of the throughput
+           measured on that connection. Long enough that the round trip is not
+           the dominant cost, short enough that a peer going quiet is noticed. */
+        constexpr float SYNC_BATCH_TARGET_SECONDS = 30.0f;
+
+        /* How many peers must agree on the network height before a lite node
+           will act on the verdict that its lite height is too shallow. One peer
+           could otherwise stop the daemon by understating its own chain. */
+        constexpr uint32_t LITE_DEPTH_CHECK_MIN_SAMPLES = 4;
+
         template<class t_parameter>
         bool post_notify(IP2pEndpoint &p2p, typename t_parameter::request &arg, const CryptoNoteConnectionContext &context)
         {
@@ -40,7 +55,7 @@ namespace CryptoNote
         }
 
         template<class t_parameter>
-        void relay_post_notify(IP2pEndpoint &p2p, typename t_parameter::request &arg, const boost::uuids::uuid *excludeConnection = nullptr)
+        void relay_post_notify(IP2pEndpoint &p2p, typename t_parameter::request &arg, const Common::Uuid *excludeConnection = nullptr)
         {
             p2p.externalRelayNotifyToAll(t_parameter::ID, LevinProtocol::encode(arg), excludeConnection);
         }
@@ -272,7 +287,7 @@ namespace CryptoNote
             assert(context.m_needed_objects.empty());
             assert(context.m_requested_objects.empty());
 
-            NOTIFY_REQUEST_CHAIN::request r = boost::value_initialized<NOTIFY_REQUEST_CHAIN::request>();
+            NOTIFY_REQUEST_CHAIN::request r = NOTIFY_REQUEST_CHAIN::request {};
             r.block_ids = m_core.buildSparseChain();
             logger(Logging::TRACE) << context << "-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size();
             post_notify<NOTIFY_REQUEST_CHAIN>(*m_p2p, r, context);
@@ -338,8 +353,8 @@ namespace CryptoNote
                 << " | " << std::setw(14) << std::left << formatUptime(cntxt.m_started)
                 << " | " << std::setw(8) << std::right << cntxt.m_remote_blockchain_height
                 << " | " << std::setw(6) << std::left << "no"
-                << " | " << std::setw(5) << std::right << cntxt.m_next_request_block_rate
-                << " | " << std::setw(4) << std::right << 0
+                << " | " << std::setw(5) << std::right << cntxt.m_sync_batch_size
+                << " | " << std::setw(4) << std::right << cntxt.m_sync_failures
                 << " |";
             rows.push_back(row.str());
         });
@@ -366,11 +381,65 @@ namespace CryptoNote
         return m_core.getTopBlockIndex() + 1;
     }
 
+    void CryptoNoteProtocolHandler::setLiteNodeConfig(const uint32_t liteHeight)
+    {
+        m_liteHeight = liteHeight;
+    }
+
+    uint32_t CryptoNoteProtocolHandler::getLiteNodeHeight() const
+    {
+        return m_liteHeight;
+    }
+
     bool CryptoNoteProtocolHandler::process_payload_sync_data(
         const CORE_SYNC_DATA &hshd,
         CryptoNoteConnectionContext &context,
         bool is_initial)
     {
+        /* A lite node keeps no block bodies below its lite height and so can
+           never undo a block down there - the records an undo needs were never
+           written. The height therefore has to sit far enough below the network
+           top that no reorg can reach it, and how tall the network is only
+           becomes knowable once peers start talking. Settle it here, once.
+
+           A peer claiming an inflated height can still let a bad lite height
+           through. That is the far less interesting direction: the worst it does
+           is allow a configuration the operator asked for. */
+        if (m_liteHeight != 0 && !m_liteDepthChecked && hshd.current_height > 0)
+        {
+            const uint64_t required = CryptoNote::parameters::MIN_LITE_FULL_BLOCK_DEPTH;
+            const uint64_t needed = static_cast<uint64_t>(m_liteHeight) + required;
+            const uint64_t ourHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
+
+            m_liteMaxPeerHeight = std::max<uint64_t>(m_liteMaxPeerHeight, hshd.current_height);
+            ++m_liteDepthSamples;
+
+            const uint64_t networkHeight = std::max(ourHeight, m_liteMaxPeerHeight);
+
+            if (networkHeight >= needed)
+            {
+                /* Settled, and it stays settled: the margin only widens as the
+                   chain grows. */
+                m_liteDepthChecked = true;
+            }
+            else if (m_liteDepthSamples >= LITE_DEPTH_CHECK_MIN_SAMPLES)
+            {
+                m_liteDepthChecked = true;
+
+                const uint64_t maxAllowed = networkHeight > required ? networkHeight - required : 0;
+
+                logger(Logging::FATAL, Logging::BRIGHT_RED)
+                    << "--lite-height " << m_liteHeight << " is too close to the network top (" << networkHeight
+                    << ", the tallest chain seen across " << m_liteDepthSamples
+                    << " peers). A lite node must keep at least " << required
+                    << " blocks of full data above its lite height, so a reorg can never reach the part it did not "
+                       "store. The highest value this network currently allows is "
+                    << maxAllowed << ". Delete the data directory and restart with a lower --lite-height.";
+
+                exit(1);
+            }
+        }
+
         if (context.m_state == CryptoNoteConnectionContext::state_before_handshake && !is_initial)
         {
             return true;
@@ -479,7 +548,7 @@ namespace CryptoNote
         typedef typename Command::request Request;
         int command = Command::ID;
 
-        Request req = boost::value_initialized<Request>();
+        Request req = Request {};
         if (!LevinProtocol::decode(reqBuf, req))
         {
             throw std::runtime_error("Failed to load_from_binary in command " + std::to_string(command));
@@ -536,8 +605,21 @@ namespace CryptoNote
         CryptoNoteConnectionContext &context)
     {
         logger(Logging::TRACE) << context << "NOTIFY_NEW_BLOCK (hop " << arg.hop << ")";
+
+        /* Ignore anything claimed by a peer that has not completed the
+           handshake. This used to be recorded before the state was checked, so
+           an unauthenticated peer could announce any height it liked and have
+           it adopted as the network height. That figure only ever moves up, so
+           one bogus announcement left the daemon reporting a nonsense network
+           height, and considering itself unsynced, until it was restarted. */
+        if (context.m_state == CryptoNoteConnectionContext::state_before_handshake)
+        {
+            return 1;
+        }
+
         updateObservedHeight(arg.current_blockchain_height, context);
         context.m_remote_blockchain_height = arg.current_blockchain_height;
+
         if (context.m_state != CryptoNoteConnectionContext::state_normal)
         {
             return 1;
@@ -573,7 +655,7 @@ namespace CryptoNote
         else if (result == error::AddBlockErrorCondition::BLOCK_REJECTED)
         {
             context.m_state = CryptoNoteConnectionContext::state_synchronizing;
-            NOTIFY_REQUEST_CHAIN::request r = boost::value_initialized<NOTIFY_REQUEST_CHAIN::request>();
+            NOTIFY_REQUEST_CHAIN::request r = NOTIFY_REQUEST_CHAIN::request {};
             r.block_ids = m_core.buildSparseChain();
             logger(Logging::TRACE) << context << "-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size();
             post_notify<NOTIFY_REQUEST_CHAIN>(*m_p2p, r, context);
@@ -647,6 +729,25 @@ namespace CryptoNote
         //  connection"; context.m_state = CryptoNoteConnectionContext::state_shutdown;
         //}
 
+        /* Bound what a peer can ask for in one request. Every hash here is
+           turned into a full raw block held in memory, copied again for the
+           legacy conversion and a third time when the response is encoded, so
+           an unbounded list is an amplification lever: a few megabytes of
+           hashes can make this node allocate gigabytes, on the dispatcher
+           thread, before the write queue limit ever pushes back.
+
+           The bound is the same one request_missing_objects clamps its own
+           block rate to, so a peer syncing normally never reaches it. */
+        if (arg.blocks.size() > BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT)
+        {
+            logger(Logging::WARNING, Logging::BRIGHT_YELLOW)
+                << context << "NOTIFY_REQUEST_GET_OBJECTS asked for " << arg.blocks.size()
+                << " blocks, more than the " << BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT
+                << " allowed per request, dropping connection";
+            context.m_state = CryptoNoteConnectionContext::state_shutdown;
+            return 1;
+        }
+
         rsp.current_blockchain_height = m_core.getTopBlockIndex() + 1;
         std::vector<RawBlock> rawBlocks;
         m_core.getBlocks(arg.blocks, rawBlocks, rsp.missed_ids);
@@ -709,8 +810,8 @@ namespace CryptoNote
                 context.m_state = CryptoNoteConnectionContext::state_idle;
                 context.m_needed_objects.clear();
                 context.m_requested_objects.clear();
-                context.m_request_block_rate = 0;
-                context.m_next_request_block_rate = 1;
+                context.m_sync_batch_size = 0;
+                context.m_sync_failures = 0;
                 logger(Logging::DEBUGGING) << context << "Connection set to idle state.";
                 return 1;
             }
@@ -742,12 +843,52 @@ namespace CryptoNote
 
         if (!context.m_requested_objects.empty())
         {
-            logger(Logging::ERROR, Logging::BRIGHT_RED)
-                << context << "returned not all requested objects (context.m_requested_objects.size()="
-                << context.m_requested_objects.size() << "), dropping connection";
+            /* A peer that reports the blocks it could not supply is answering
+               honestly, not misbehaving. A pruned node is the common case: it
+               still has the hashes, so it answers our chain request, but the
+               raw blocks below its prune floor are gone. Say so plainly instead
+               of calling it a protocol violation.
+
+               We still drop the connection, because this node cannot make
+               progress against a peer that will not serve the history we need.
+               Nothing here advertises pruning during the handshake, so we
+               cannot avoid picking such a peer in the first place. */
+            const bool peerReportedMissing = !arg.missed_ids.empty();
+
+            if (peerReportedMissing)
+            {
+                logger(Logging::WARNING, Logging::BRIGHT_YELLOW)
+                    << context << "cannot serve " << arg.missed_ids.size()
+                    << " of the blocks we requested (it is most likely pruned), dropping connection";
+            }
+            else
+            {
+                logger(Logging::ERROR, Logging::BRIGHT_RED)
+                    << context << "returned not all requested objects (context.m_requested_objects.size()="
+                    << context.m_requested_objects.size() << "), dropping connection";
+            }
+
+            onSyncChunkFailure(context);
             context.m_state = CryptoNoteConnectionContext::state_shutdown;
             return 1;
         }
+
+        size_t rawBytes = 0;
+
+        for (const auto &rawBlock : rawBlocks)
+        {
+            rawBytes += rawBlock.block.size();
+
+            for (const auto &tx : rawBlock.transactions)
+            {
+                rawBytes += tx.size();
+            }
+        }
+
+        /* Record the throughput sample before anything issues a new request:
+           request_missing_objects() restarts m_sync_chunk_start_time, and this
+           sample has to be measured against the request this reply answers. */
+        onSyncChunkSuccess(context, cachedBlocks.size(), rawBytes);
 
         {
             int result = processObjects(context, std::move(rawBlocks), cachedBlocks);
@@ -760,7 +901,6 @@ namespace CryptoNote
         logger(DEBUGGING, BRIGHT_GREEN) << "Local blockchain updated, new index = " << m_core.getTopBlockIndex();
         if (!m_stop && context.m_state == CryptoNoteConnectionContext::state_synchronizing)
         {
-            adjust_block_rate(context);
             request_missing_objects(context, true);
         }
 
@@ -814,25 +954,127 @@ namespace CryptoNote
         return 0;
     }
 
-    void CryptoNoteProtocolHandler::adjust_block_rate(CryptoNoteConnectionContext &context)
+    void CryptoNoteProtocolHandler::setSyncTuning(
+        const uint32_t syncBatchMin,
+        const uint32_t syncBatchMax,
+        const uint64_t blockSyncBytes)
     {
-        const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - context.m_request_block_start);
-        const auto time_taken_ms = duration.count();
+        m_syncBatchMin = std::max<uint32_t>(1, syncBatchMin);
+        m_syncBatchMax = std::max<uint32_t>(m_syncBatchMin, syncBatchMax);
 
-        if (time_taken_ms == 0) {
-            context.m_request_block_rate = BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT;
-            context.m_next_request_block_rate = BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT;
-        } else {
-            context.m_request_block_rate = static_cast<size_t>((double) context.m_next_request_block_rate / ((double) time_taken_ms / 1000.0));
-            context.m_next_request_block_rate = context.m_request_block_rate;
+        /* A budget below one block cannot be met, and one above the P2P packet
+           limit would be cut short by the transport anyway. */
+        m_syncBlockSyncBytes = std::max<uint64_t>(
+            SYNC_BLOCK_BUDGET_MIN_BYTES, std::min<uint64_t>(blockSyncBytes, SYNC_BLOCK_BUDGET_MAX_BYTES));
+    }
+
+    uint32_t CryptoNoteProtocolHandler::getAdaptiveBatchSize(const CryptoNoteConnectionContext &context) const
+    {
+        const uint32_t current = context.m_sync_batch_size == 0 ? m_syncBatchMin : context.m_sync_batch_size;
+
+        return std::max(m_syncBatchMin, std::min(current, m_syncBatchMax));
+    }
+
+    void CryptoNoteProtocolHandler::onSyncChunkSuccess(
+        CryptoNoteConnectionContext &context,
+        const size_t blocks,
+        const size_t bytes)
+    {
+        context.m_sync_blocks_received += blocks;
+        context.m_sync_bytes_received += bytes;
+        context.m_sync_failures = 0;
+
+        if (blocks > 0)
+        {
+            const uint64_t sampleAvgBlockBytes = std::max<uint64_t>(1, static_cast<uint64_t>(bytes / blocks));
+
+            /* Rolling average, 80% history to 20% sample, so one unusually
+               large or small chunk does not swing the byte budget. */
+            context.m_sync_avg_block_bytes = context.m_sync_avg_block_bytes == 0
+                                                 ? sampleAvgBlockBytes
+                                                 : ((context.m_sync_avg_block_bytes * 8) + (sampleAvgBlockBytes * 2)) / 10;
+
+            const auto elapsed =
+                std::chrono::duration<float>(std::chrono::steady_clock::now() - context.m_sync_chunk_start_time).count();
+
+            /* Ignore samples too short to measure and too long to be a round
+               trip; both would poison the average. */
+            if (elapsed > 0.05f && elapsed < 300.0f)
+            {
+                const float sample = static_cast<float>(blocks) / elapsed;
+
+                context.m_sync_blocks_per_second = context.m_sync_blocks_per_second == 0.0f
+                                                       ? sample
+                                                       : (context.m_sync_blocks_per_second * 0.8f) + (sample * 0.2f);
+            }
         }
 
-        if (context.m_next_request_block_rate < 1) {
-            context.m_next_request_block_rate = 1;
-        } else if (context.m_next_request_block_rate > BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT) {
-            context.m_next_request_block_rate = BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT;
+        if (context.m_sync_blocks_per_second > 0.0f)
+        {
+            /* Aim each request at about SYNC_BATCH_TARGET_SECONDS of work, so a
+               fast peer is asked for more and a slow one is not left holding a
+               request it cannot answer in time. */
+            const uint32_t target =
+                static_cast<uint32_t>(context.m_sync_blocks_per_second * SYNC_BATCH_TARGET_SECONDS);
+
+            context.m_sync_batch_size = std::max(m_syncBatchMin, std::min(target, m_syncBatchMax));
+        }
+        else if (context.m_sync_batch_size < m_syncBatchMax)
+        {
+            /* No throughput reading yet: grow a quarter at a time rather than
+               jumping straight to the ceiling. */
+            const uint32_t next =
+                context.m_sync_batch_size + std::max<uint32_t>(1, context.m_sync_batch_size / 4);
+
+            context.m_sync_batch_size = std::min(next, m_syncBatchMax);
         }
     }
+
+    void CryptoNoteProtocolHandler::onSyncChunkFailure(CryptoNoteConnectionContext &context)
+    {
+        ++context.m_sync_failures;
+
+        /* Halve the ask before giving up on the peer; a batch that was simply
+           too big for it may well succeed smaller. */
+        if (context.m_sync_batch_size > m_syncBatchMin)
+        {
+            context.m_sync_batch_size = std::max(m_syncBatchMin, context.m_sync_batch_size / 2);
+        }
+
+    }
+
+    uint32_t CryptoNoteProtocolHandler::getSyncActivePeers() const
+    {
+        uint32_t active = 0;
+
+        m_p2p->for_each_connection([&active](const CryptoNoteConnectionContext &ctx, uint64_t) {
+            if (ctx.m_state == CryptoNoteConnectionContext::state_synchronizing
+                || ctx.m_state == CryptoNoteConnectionContext::state_sync_required)
+            {
+                ++active;
+            }
+        });
+
+        return active;
+    }
+
+    uint32_t CryptoNoteProtocolHandler::getSyncAvgBatchSize() const
+    {
+        uint64_t sum = 0;
+        uint32_t peers = 0;
+
+        m_p2p->for_each_connection([&sum, &peers](const CryptoNoteConnectionContext &ctx, uint64_t) {
+            if (ctx.m_sync_batch_size > 0)
+            {
+                sum += ctx.m_sync_batch_size;
+                ++peers;
+            }
+        });
+
+        return peers == 0 ? 0 : static_cast<uint32_t>(sum / peers);
+    }
+
+
 
     int CryptoNoteProtocolHandler::doPushLiteBlock(
         NOTIFY_NEW_LITE_BLOCK::request arg,
@@ -942,7 +1184,7 @@ namespace CryptoNote
             else if (result == error::AddBlockErrorCondition::BLOCK_REJECTED)
             {
                 context.m_state = CryptoNoteConnectionContext::state_synchronizing;
-                NOTIFY_REQUEST_CHAIN::request r = boost::value_initialized<NOTIFY_REQUEST_CHAIN::request>();
+                NOTIFY_REQUEST_CHAIN::request r = NOTIFY_REQUEST_CHAIN::request {};
                 r.block_ids = m_core.buildSparseChain();
                 logger(Logging::TRACE) << context
                                        << "-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size();
@@ -1027,19 +1269,35 @@ namespace CryptoNote
         if (!context.m_needed_objects.empty())
         {
             // we know objects that we need, request this objects
-            context.m_request_block_start = std::chrono::high_resolution_clock::now();
+            context.m_sync_chunk_start_time = std::chrono::steady_clock::now();
 
             NOTIFY_REQUEST_GET_OBJECTS::request req;
             size_t count = 0;
             auto it = context.m_needed_objects.begin();
-            size_t max_to_download = context.m_next_request_block_rate;
+            const size_t max_to_download = getAdaptiveBatchSize(context);
+
+            /* Cap the batch by bytes as well as by count. Block sizes vary by
+               orders of magnitude across the chain, so a count that is
+               comfortable over one range asks for a response of a wholly
+               different size over another - and the reply still has to fit in
+               one P2P packet. Until this peer has served a chunk there is no
+               size estimate, so only the count applies. */
+            const uint64_t maxBytes = m_syncBlockSyncBytes;
+            const uint64_t avgBlockBytes = context.m_sync_avg_block_bytes;
+            uint64_t projectedBytes = 0;
 
             while (it != context.m_needed_objects.end() && count < max_to_download)
             {
+                if (avgBlockBytes > 0 && count > 0 && projectedBytes + avgBlockBytes > maxBytes)
+                {
+                    break;
+                }
+
                 if (!(check_having_blocks && m_core.hasBlock(*it)))
                 {
                     req.blocks.push_back(*it);
                     ++count;
+                    projectedBytes += avgBlockBytes;
                     context.m_requested_objects.insert(*it);
                 }
                 it = context.m_needed_objects.erase(it);
@@ -1050,7 +1308,7 @@ namespace CryptoNote
         else if (context.m_last_response_height < context.m_remote_blockchain_height - 1)
         { // we have to fetch more objects ids, request blockchain entry
 
-            NOTIFY_REQUEST_CHAIN::request r = boost::value_initialized<NOTIFY_REQUEST_CHAIN::request>();
+            NOTIFY_REQUEST_CHAIN::request r = NOTIFY_REQUEST_CHAIN::request {};
             r.block_ids = m_core.buildSparseChain();
             logger(Logging::TRACE) << context << "-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size();
             post_notify<NOTIFY_REQUEST_CHAIN>(*m_p2p, r, context);
@@ -1147,6 +1405,11 @@ namespace CryptoNote
                                    << arg.total_height << "\r\nm_start_height=" << arg.start_height
                                    << "\r\nm_block_ids.size()=" << arg.m_block_ids.size();
             context.m_state = CryptoNoteConnectionContext::state_shutdown;
+
+            /* Stop here. Without the return we carried on queueing objects from
+               a response we had just declared invalid, and then sent a fresh
+               request down a connection already marked for shutdown. */
+            return 1;
         }
 
         /* When the node has been bootstrapped from a specific height, blocks
@@ -1214,8 +1477,17 @@ namespace CryptoNote
         CryptoNoteConnectionContext &context)
     {
         logger(Logging::TRACE) << context << "NOTIFY_NEW_LITE_BLOCK (hop " << arg.hop << ")";
+
+        /* Ignore claims from a peer that has not handshaked — see
+           handle_notify_new_block. */
+        if (context.m_state == CryptoNoteConnectionContext::state_before_handshake)
+        {
+            return 1;
+        }
+
         updateObservedHeight(arg.current_blockchain_height, context);
         context.m_remote_blockchain_height = arg.current_blockchain_height;
+
         if (context.m_state != CryptoNoteConnectionContext::state_normal)
         {
             return 1;
@@ -1279,7 +1551,7 @@ namespace CryptoNote
         logger(Logging::DEBUGGING) << "NOTIFY_NEW_BLOCK - MSG_SIZE = " << buf.size();
         logger(Logging::DEBUGGING) << "NOTIFY_NEW_LITE_BLOCK - MSG_SIZE = " << lite_buf.size();
 
-        std::list<boost::uuids::uuid> liteBlockConnections, normalBlockConnections;
+        std::list<Common::Uuid> liteBlockConnections, normalBlockConnections;
 
         // sort the peers into their support categories.
         m_p2p->for_each_connection([this, &liteBlockConnections, &normalBlockConnections](

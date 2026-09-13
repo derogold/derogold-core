@@ -8,16 +8,21 @@
 
 #include "DBUtils.h"
 
-#include <boost/serialization/unordered_set.hpp>
+#include <json.hpp>
 
 using namespace CryptoNote;
 
 BlockchainWriteBatch &BlockchainWriteBatch::insertSpentKeyImages(
     const uint32_t blockIndex,
-    const std::unordered_set<Crypto::KeyImage> &spentKeyImages)
+    const std::unordered_set<Crypto::KeyImage> &spentKeyImages,
+    const bool storeRewindIndex)
 {
     rawDataToInsert.reserve(rawDataToInsert.size() + spentKeyImages.size() + 1);
-    rawDataToInsert.emplace_back(DB::serialize(DB::BLOCK_INDEX_TO_KEY_IMAGE_PREFIX, blockIndex, spentKeyImages));
+
+    if (storeRewindIndex)
+    {
+        rawDataToInsert.emplace_back(DB::serialize(DB::BLOCK_INDEX_TO_KEY_IMAGE_PREFIX, blockIndex, spentKeyImages));
+    }
 
     for (const Crypto::KeyImage &keyImage : spentKeyImages)
     {
@@ -46,6 +51,14 @@ BlockchainWriteBatch &BlockchainWriteBatch::insertCachedTransaction(const Extend
     //    DB::V2::serialize(transaction.transactionHash, transaction));
     //rawDataToInsertWithCF[DB::V2::TRANSACTIONS_CF].emplace_back(
     //    DB::V2::serialize(DB::TRANSACTIONS_COUNT_KEY, totalTxsCount));
+
+    return *this;
+}
+
+BlockchainWriteBatch &BlockchainWriteBatch::insertTransactionCount(const uint64_t totalTxsCount)
+{
+    rawDataToInsert.emplace_back(
+        DB::serialize(DB::TRANSACTION_HASH_TO_TRANSACTION_INFO_PREFIX, DB::TRANSACTIONS_COUNT_KEY, totalTxsCount));
 
     return *this;
 }
@@ -239,6 +252,22 @@ BlockchainWriteBatch &BlockchainWriteBatch::removeKeyOutputInfo(IBlockchainCache
 BlockchainWriteBatch &BlockchainWriteBatch::setPruneFloor(uint32_t pruneFloor)
 {
     rawDataToInsert.emplace_back(DB::serialize(DB::PRUNE_FLOOR_PREFIX, DB::PRUNE_FLOOR_KEY, pruneFloor));
+    return *this;
+}
+
+BlockchainWriteBatch &BlockchainWriteBatch::insertTransactionPublicKey(const Crypto::Hash &txHash,
+                                                                       const Crypto::PublicKey &pubKey)
+{
+    rawDataToInsert.emplace_back(DB::serialize(DB::TX_HASH_TO_PUBLIC_KEY_PREFIX, txHash, pubKey));
+    return *this;
+}
+
+BlockchainWriteBatch &BlockchainWriteBatch::insertWalletSyncBlock(uint32_t blockIndex,
+                                                                   const WalletTypes::WalletBlockInfo &block)
+{
+    const std::string key = DB::serializeKey(DB::BLOCK_INDEX_TO_WALLET_SYNC_PREFIX, blockIndex);
+    const std::string value = nlohmann::json(block).dump();
+    rawDataToInsert.emplace_back(key, value);
     return *this;
 }
 

@@ -46,6 +46,13 @@ class BlockDownloader
     /* Drops the oldest block from the internal queue */
     void dropBlock(const uint64_t blockHeight, const Crypto::Hash blockHash);
 
+    /* Throws away what the wallet knew at and above this height, once a reorg
+       has established that those blocks are gone. */
+    void forgetBlocksFrom(const uint64_t height);
+
+    /* What the wallet holds at this height, if it still holds anything. */
+    std::optional<Crypto::Hash> getHashAtHeight(const uint64_t height) const;
+
     /* Start block downloading process */
     void start();
 
@@ -54,6 +61,14 @@ class BlockDownloader
 
     /* Returns height of processed blocks */
     uint64_t getHeight() const;
+
+    /* Returns the prune floor reported by the daemon (0 if not pruned) */
+    uint64_t getPruneFloor() const;
+
+    /* Forget the prune floor. Call when the daemon we talk to changes, so the
+       floor is re-learned from the new node instead of a stale one being
+       applied to a node that may not be pruned at all. */
+    void clearPruneFloor();
 
     void fromJSON(const JSONObject &j, const uint64_t startHeight, const uint64_t startTimestamp);
 
@@ -98,6 +113,9 @@ class BlockDownloader
 
     /* Height to begin syncing at */
     uint64_t m_startHeight;
+
+    /* Prune floor reported by daemon (0 = daemon not pruned) */
+    std::atomic<uint64_t> m_pruneFloor {0};
 
     /* Sync progress */
     SynchronizationStatus m_synchronizationStatus;

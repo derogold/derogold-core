@@ -6,6 +6,7 @@
 
 #include "MinerManager.h"
 
+#include <common/IpcSocket.h>
 #include <system/Dispatcher.h>
 
 int main(int argc, char **argv)
@@ -22,6 +23,14 @@ int main(int argc, char **argv)
             auto httpClient = std::make_shared<httplib::Client>(
                 config.daemonHost.c_str(), config.daemonPort /* 10 second timeout */
             );
+
+            /* An absolute path or an "@name" where a host goes names a
+               daemon's local socket instead. The port is meaningless for one;
+               httplib wants one anyway and ignores it. */
+            if (Common::Ipc::looksLikePath(config.daemonHost))
+            {
+                Common::Ipc::configureClient(*httpClient);
+            }
 
             httpClient->set_connection_timeout(10);
 

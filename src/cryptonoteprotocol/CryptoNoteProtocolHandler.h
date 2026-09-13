@@ -90,6 +90,22 @@ namespace CryptoNote
 
         void requestMissingPoolTransactions(const CryptoNoteConnectionContext &context);
 
+        /* Operator-settable sync limits, from the --sync-* and --block-sync-*
+           flags. Applied once at startup. */
+        void setSyncTuning(uint32_t syncBatchMin, uint32_t syncBatchMax, uint64_t blockSyncBytes);
+
+        /* Zero for a normal node. Above zero this is the height from which full
+           block data is stored; see LITENODE.md. */
+        void setLiteNodeConfig(uint32_t liteHeight);
+
+        uint32_t getLiteNodeHeight() const override;
+
+        /* Peers currently being synced from, and the mean batch size across
+           them; for the sync_info console command. */
+        uint32_t getSyncActivePeers() const override;
+
+        uint32_t getSyncAvgBatchSize() const override;
+
       private:
         //----------------- commands handlers ----------------------------------------------
         int handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request &arg, CryptoNoteConnectionContext &context);
@@ -152,7 +168,18 @@ namespace CryptoNote
             std::vector<RawBlock> &&rawBlocks,
             const std::vector<CachedBlock> &cachedBlocks);
 
-        static void adjust_block_rate(CryptoNoteConnectionContext &context);
+        /* How many blocks to ask this peer for next, clamped to the configured
+           bounds. */
+        uint32_t getAdaptiveBatchSize(const CryptoNoteConnectionContext &context) const;
+
+        /* Fold a chunk that arrived and applied into the peer's throughput
+           estimate, and size the next batch from it. */
+        void onSyncChunkSuccess(CryptoNoteConnectionContext &context, size_t blocks, size_t bytes);
+
+        /* Back the batch off and count the failure. The caller decides what to
+           do with the peer; every failure path in this handler already closes
+           the connection. */
+        void onSyncChunkFailure(CryptoNoteConnectionContext &context);
 
         Logging::LoggerRef logger;
 
@@ -188,6 +215,27 @@ namespace CryptoNote
         std::atomic<size_t> m_peersCount;
 
         Tools::ObserverManager<ICryptoNoteProtocolObserver> m_observerManager;
+
+        /* 0 = full node. Above 0, the height this node stores full blocks from. */
+        uint32_t m_liteHeight = 0;
+
+        /* The lite height is only safe once we know how tall the network is, and
+           that is first knowable at the opening handshake. Settled once, either
+           way, and never revisited. */
+        bool m_liteDepthChecked = false;
+
+        /* Tallest chain any peer has claimed so far. A max, so a peer reporting
+           a short chain - honestly or otherwise - cannot drag the answer down. */
+        uint64_t m_liteMaxPeerHeight = 0;
+
+        /* How many peers have contributed to the above. The verdict that stops
+           the daemon waits for several, so one peer cannot deliver it alone. */
+        uint32_t m_liteDepthSamples = 0;
+
+        /* Sync tuning, from the --sync-batch-* and --block-sync-bytes flags. */
+        uint32_t m_syncBatchMin = 20;
+        uint32_t m_syncBatchMax = BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT;
+        uint64_t m_syncBlockSyncBytes = 16 * 1024 * 1024;
 
         bool m_syncProgressStarted = false;
         uint64_t m_syncStartHeight = 0;

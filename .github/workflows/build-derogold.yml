@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - "master"
       - "development"
   pull_request:
     branches:
+      - "master"
       - "development"
   schedule:
     - cron: 0 0 * * 0
@@ -23,32 +25,27 @@ jobs:
   build_derogold:
     name: ${{ matrix.build_preset }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    
-    concurrency: 
+
+    concurrency:
       group: build_derogold_${{ github.ref }}_${{ matrix.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            arch: x64
-            compiler: msvc
-            install: ""
-            configure_preset: windows-x64-msvc-package
-            build_preset: windows-x64-msvc-package
-            run_cryptotest: true
-
+          # Windows is covered by the MSYS2 MinGW jobs below. There is no MSVC
+          # job: with vcpkg gone there is no OpenSSL package source for MSVC,
+          # so such a job would have nothing to link against.
           - os: windows-latest
             arch: x64
             compiler: gcc
-            install: ""
             msys2_environment: MINGW64
             msys2_install: >-
               mingw-w64-x86_64-ccache
               mingw-w64-x86_64-cmake
               mingw-w64-x86_64-ninja
               mingw-w64-x86_64-toolchain
+              mingw-w64-x86_64-openssl
             configure_preset: windows-x64-mingw-gcc-package
             build_preset: windows-x64-mingw-gcc-package
             run_cryptotest: true
@@ -56,13 +53,13 @@ jobs:
           - os: windows-latest
             arch: x64
             compiler: clang
-            install: ""
             msys2_environment: CLANG64
             msys2_install: >-
               mingw-w64-clang-x86_64-ccache
               mingw-w64-clang-x86_64-cmake
               mingw-w64-clang-x86_64-ninja
               mingw-w64-clang-x86_64-toolchain
+              mingw-w64-clang-x86_64-openssl
             configure_preset: windows-x64-mingw-clang-package
             build_preset: windows-x64-mingw-clang-package
             run_cryptotest: true
@@ -73,13 +70,10 @@ jobs:
             install: >-
               build-essential
               cmake
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-x64-gcc-package
             build_preset: linux-x64-gcc-package
             run_cryptotest: true
@@ -90,13 +84,10 @@ jobs:
             install: >-
               cmake
               crossbuild-essential-arm64
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-arm64-gcc-cross-package
             build_preset: linux-arm64-gcc-cross-package
             run_cryptotest: false
@@ -107,13 +98,10 @@ jobs:
             install: >-
               build-essential
               cmake
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-x64-gcc-package
             build_preset: linux-x64-gcc-package
             run_cryptotest: true
@@ -124,13 +112,10 @@ jobs:
             install: >-
               cmake
               crossbuild-essential-arm64
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-arm64-gcc-cross-package
             build_preset: linux-arm64-gcc-cross-package
             run_cryptotest: false
@@ -138,39 +123,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Submodule Fetch
-        run: |
-          cd "${{ github.workspace }}/vcpkg"
-          git fetch --unshallow
 
       - name: Install Program / Dependencies
+        if: runner.os == 'Linux'
         run: |
-          if ("${{ runner.os }}" -eq "Windows")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              choco install ${{ matrix.install }} -y
-            }
-          }
-          elseif ("${{ runner.os }}" -eq "Linux")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              sudo apt-get update
-              sudo apt-get install ${{ matrix.install }} -y
-            }
-          }
-          elseif ("${{ runner.os }}" -eq "macOS")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              brew update
-              brew install ${{ matrix.install }}
-            }
-          }
+          sudo apt-get update
+          sudo apt-get install ${{ matrix.install }} -y
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
@@ -179,7 +137,7 @@ jobs:
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
-        if: runner.os == 'Windows' && matrix.compiler != 'msvc'
+        if: runner.os == 'Windows'
         with:
           update: true
           install: ${{ matrix.msys2_install }}
@@ -191,20 +149,17 @@ jobs:
           ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
           max-size: 150M
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.5
-
       - name: Build DeroGold (MSYS2)
-        if: runner.os == 'Windows' && matrix.compiler != 'msvc'
+        if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}
         shell: msys2 {0}
         run: |
           cmake --preset ${{ matrix.configure_preset }}
           cmake --build --preset ${{ matrix.build_preset }}
 
-      - name: Build DeroGold (MSVC/GCC/CLANG)
+      - name: Build DeroGold (GCC/Clang)
         uses: lukka/run-cmake@v10.8
-        if: runner.os != 'Windows' || (runner.os == 'Windows' && matrix.compiler == 'msvc')
+        if: runner.os != 'Windows'
         with:
           configurePreset: '${{ matrix.configure_preset }}'
           buildPreset: '${{ matrix.build_preset }}'
@@ -213,13 +168,13 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-vcpkg-build-logs
-          path: ${{ github.workspace }}/vcpkg/buildtrees/**/*.log
+          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-cmake-logs
+          path: ${{ github.workspace }}/build/**/*.log
           if-no-files-found: ignore
 
       - name: Upload Package
         uses: actions/upload-artifact@v4
-        if: success() 
+        if: success()
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-build
           path: |
@@ -235,11 +190,6 @@ jobs:
 
           if ("${{ runner.os }}" -eq "Windows")
           {
-            if ("${{ matrix.compiler}}" -eq "msvc")
-            {
-              cd "Release"
-            }
-            
             .\cryptotest.exe --help=false
           }
           elseif ("${{ runner.os }}" -eq "Linux")

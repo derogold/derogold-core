@@ -257,6 +257,34 @@ bool PeerlistManager::append_with_peer_gray(const PeerlistEntry &newPeer)
     return false;
 }
 
+bool PeerlistManager::remove_from_gray(const NetworkAddress &addr)
+{
+    const auto it = std::find_if(
+        m_peers_gray.begin(), m_peers_gray.end(), [&addr](const auto &peer) { return peer.adr == addr; });
+
+    if (it == m_peers_gray.end())
+    {
+        return false;
+    }
+
+    m_peers_gray.erase(it);
+    return true;
+}
+
+bool PeerlistManager::remove_from_white(const NetworkAddress &addr)
+{
+    const auto it = std::find_if(
+        m_peers_white.begin(), m_peers_white.end(), [&addr](const auto &peer) { return peer.adr == addr; });
+
+    if (it == m_peers_white.end())
+    {
+        return false;
+    }
+
+    m_peers_white.erase(it);
+    return true;
+}
+
 Peerlist &PeerlistManager::getWhite()
 {
     return m_whitePeerlist;

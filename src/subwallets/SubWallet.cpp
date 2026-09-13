@@ -340,6 +340,15 @@ std::vector<WalletTypes::TxInputAndOwner> SubWallet::getSpendableInputs(const ui
     std::vector<WalletTypes::TxInputAndOwner> inputs;
     for (const auto &input : m_unspentInputs)
     {
+        /* Skip inputs without a resolved global output index.  This happens
+           when the wallet synced against a pruned node — the balance is
+           visible but the inputs cannot be spent until re-synced on a
+           non-pruned node. */
+        if (!input.globalOutputIndex)
+        {
+            continue;
+        }
+
         if (Utilities::isInputUnlocked(input.unlockTime, height))
         {
             inputs.emplace_back(input, m_publicSpendKey, m_privateSpendKey);

@@ -54,9 +54,20 @@ namespace DaemonConfig
         std::string outputFile;
 
         std::string enableCors;
-        bool enableTrtlRpc = false;
         std::string feeAddress;
         int feeAmount = 0;
+
+        /* Serve the RPC on a local AF_UNIX socket as well as the TCP port.
+           Empty leaves it off. The mode on the socket file is the entire
+           access control, so it is owner-only unless widened deliberately.
+           POSIX only. */
+        std::string rpcIpcPath;
+        std::string rpcIpcMode = "0600";
+        std::string rpcIpcGroup;
+
+        /* Attach an interactive console to a daemon that is already running,
+           over its RPC socket, instead of starting a node. */
+        std::string attachSocket;
 
         bool localIp = false;
         bool hideMyPort = false;
@@ -79,11 +90,59 @@ namespace DaemonConfig
         uint64_t dbWriteBufferSizeMB = CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
         bool dbOptimize = false;
 
+        /* Opt-in. A node that prunes cannot serve historical blocks to peers,
+           and nothing in the P2P handshake advertises that, so a requester just
+           sees missing objects and drops the connection. Defaulting this on
+           made every upgrading node silently delete all but the most recent
+           blocks on first launch, with a full resync as the only way back. */
         bool prune = false;
         bool backgroundPrune = true;
         uint32_t pruneDepth = DEFAULT_PRUNE_DEPTH;
 
+        /* Lite node: store full block data only from liteHeight upward, keeping
+           just the indexes later blocks read below it. Permanent for the
+           database once chosen, and mutually exclusive with prune and explorer
+           mode. Zero leaves the node a full node. */
+        bool lite = false;
+        uint32_t liteHeight = 0;
+
         uint32_t transactionValidationThreads = std::thread::hardware_concurrency();
+
+        /* Bounds on the per-peer block request batch. The node adapts inside
+           this range from the throughput it actually measures on each peer. */
+        uint32_t syncBatchMin = 20;
+        uint32_t syncBatchMax = CryptoNote::BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT;
+
+        /* Approximate ceiling on the bytes one block request may pull back.
+           Block sizes vary by orders of magnitude across the chain, so a count
+           alone does not bound the response. */
+        uint64_t blockSyncBytes = 16 * 1024 * 1024;
+
+        /* How many P2P connections to keep. Outgoing is what the connection
+           maker aims for; incoming is what the listener accepts before turning
+           peers away. Zero incoming makes the node outbound only. */
+        uint32_t outPeers = CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT;
+        uint32_t inPeers = CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT;
+
+        /* Built-in stratum server, so a stock miner can point straight at this
+           node with no pool and no bridge. Port 0 leaves it off. */
+        std::string stratumBindIp = "127.0.0.1";
+        uint16_t stratumBindPort = 0;
+
+        /* 0 hands miners the network difficulty, so a miner only reports when
+           it has actually found a block. */
+        uint64_t stratumShareDifficulty = 0;
+        size_t stratumMaxConnections = 32;
+
+        /* Monero-style notification hooks. Each is either a command template
+           or an http(s):// URL; empty leaves the hook off. */
+        std::string blockNotify;
+        std::string reorgNotify;
+        std::string txNotify;
+
+        /* Hooks stay quiet until the node has caught up, so a node syncing
+           from zero does not fire one per block for the whole chain. */
+        bool notifyDuringSync = false;
 
         DaemonConfiguration()
         {

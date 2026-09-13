@@ -9,6 +9,7 @@
 
 #include "version.h"
 
+#include <common/IpcSocket.h>
 #include <config/CliHeader.h>
 #include <config/Config.h>
 #include <config/CryptoNoteConfig.h>
@@ -62,6 +63,25 @@ ApiConfig parseArguments(int argc, char **argv)
         ("v,version",
          "Output software version information",
          cxxopts::value<bool>(version)->default_value("false")->implicit_value("true"));
+
+    options.add_options("Daemon")(
+        "daemon-address",
+        "The daemon to use for node operations, for requests that do not name "
+        "one. A host, or the path of a daemon's IPC socket.",
+        cxxopts::value<std::string>(config.daemonHost)->default_value(config.daemonHost),
+        "<host|path>")
+
+        ("daemon-port",
+         "The daemon RPC port to use for node operations. Ignored for a socket.",
+         cxxopts::value<uint16_t>(config.daemonPort)->default_value(std::to_string(config.daemonPort)),
+         "<port>")
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+            ("daemon-ssl",
+             "Use SSL when connecting to the daemon.",
+             cxxopts::value<bool>(config.daemonSSL)->default_value("false")->implicit_value("true"))
+#endif
+        ;
 
     options.add_options("Network")(
         "p,port",
@@ -159,6 +179,15 @@ ApiConfig parseArguments(int argc, char **argv)
     if (scanCoinbaseTransactions)
     {
         Config::config.wallet.skipCoinbaseTransactions = false;
+    }
+
+    /* Said here rather than at the first request that uses it, so an operator
+       who has pointed this at a socket the build cannot open finds out at
+       launch. */
+    if (std::string error; !Common::Ipc::validateClientAddress(config.daemonHost, error))
+    {
+        std::cout << "Cannot use --daemon-address " << config.daemonHost << ": " << error << std::endl;
+        exit(1);
     }
 
     return config;

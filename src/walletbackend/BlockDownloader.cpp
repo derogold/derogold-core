@@ -54,6 +54,12 @@ BlockDownloader &BlockDownloader::operator=(BlockDownloader &&old)
 
     m_shouldStop = std::move(old.m_shouldStop.load());
 
+    /* Carry the prune floor across. Leaving it behind meant a downloader that
+       replaced a pruned-node one kept the old floor forever, so re-syncing
+       against a full node still skipped global index lookups and left inputs
+       unspendable until the process was restarted. */
+    m_pruneFloor = old.m_pruneFloor.load();
+
     return *this;
 }
 
@@ -88,6 +94,16 @@ uint64_t BlockDownloader::getHeight() const
     return m_synchronizationStatus.getHeight();
 }
 
+uint64_t BlockDownloader::getPruneFloor() const
+{
+    return m_pruneFloor.load();
+}
+
+void BlockDownloader::clearPruneFloor()
+{
+    m_pruneFloor.store(0);
+}
+
 void BlockDownloader::downloader()
 {
     while (!m_shouldStop)
@@ -95,7 +111,12 @@ void BlockDownloader::downloader()
         {
             std::unique_lock<std::mutex> lock(m_mutex);
 
-            m_shouldTryFetch.wait(lock, [&] {
+            /* Timed wait: stop() and the consumer both signal without holding
+               this mutex, so a notification arriving between the predicate check
+               and the wait is lost. An untimed wait turned that into a download
+               thread that never woke, which hung the join in stop() and with it
+               every save and the wallet's own shutdown. */
+            m_shouldTryFetch.wait_for(lock, std::chrono::milliseconds(100), [&] {
                 if (m_shouldStop)
                 {
                     return true;
@@ -116,7 +137,13 @@ void BlockDownloader::downloader()
 
             if (!blocksDownloaded)
             {
-                Utilities::sleepUnlessStopping(std::chrono::seconds(5), m_shouldStop);
+                /* A second is the right pause for "nothing new yet". When the
+                   daemon has told us why it will not serve this wallet at all,
+                   asking again every second answers nothing and just loads a
+                   node that has already given its answer. */
+                const auto pause = m_daemon->syncError().empty() ? std::chrono::seconds(1) : std::chrono::seconds(15);
+
+                Utilities::sleepUnlessStopping(pause, m_shouldStop);
                 break;
             }
         }
@@ -127,7 +154,9 @@ void BlockDownloader::downloader()
 
 bool BlockDownloader::shouldFetchMoreBlocks() const
 {
-    size_t ramUsage = m_storedBlocks.memoryUsage([](const auto block) { return std::get<0>(block).memoryUsage(); });
+    /* Take the block by reference. Taking it by value copied every stored block
+       in full on each call, and this runs in the download loop. */
+    size_t ramUsage = m_storedBlocks.memoryUsage([](const auto &block) { return std::get<0>(block).memoryUsage(); });
 
     if (ramUsage + WalletConfig::maxBodyResponseSize < WalletConfig::blockStoreMemoryLimit)
     {
@@ -142,6 +171,16 @@ bool BlockDownloader::shouldFetchMoreBlocks() const
     }
 
     return false;
+}
+
+void BlockDownloader::forgetBlocksFrom(const uint64_t height)
+{
+    m_synchronizationStatus.forgetBlocksFrom(height);
+}
+
+std::optional<Crypto::Hash> BlockDownloader::getHashAtHeight(const uint64_t height) const
+{
+    return m_synchronizationStatus.getHashAtHeight(height);
 }
 
 void BlockDownloader::dropBlock(const uint64_t blockHeight, const Crypto::Hash blockHash)
@@ -191,36 +230,23 @@ std::vector<Crypto::Hash> BlockDownloader::getStoredBlockCheckpoints() const
 
 std::vector<Crypto::Hash> BlockDownloader::getBlockCheckpoints() const
 {
-    /* Hashes of blocks we have downloaded but not processed */
-    const auto unprocessedBlockHashes = getStoredBlockCheckpoints();
+    /* Newest first, so the daemon resumes from the first entry it recognises
+       and that is the least work for both ends.
 
-    std::vector<Crypto::Hash> result(unprocessedBlockHashes.size());
+       Blocks already downloaded but not yet processed come first: they are the
+       furthest ahead the wallet has got. Then where the wallet has actually
+       processed to, dense near the tip and thinning with depth, and then the
+       infrequent checkpoints for a fork past all of that.
 
-    std::copy(unprocessedBlockHashes.begin(), unprocessedBlockHashes.end(), result.begin());
+       This used to pad the unprocessed hashes up to fifty with processed ones
+       and stop, so a wallet with a full download buffer offered nothing at all
+       about where it had really processed to. Both are worth saying, and
+       saying both costs a couple of dozen hashes. */
+    std::vector<Crypto::Hash> result = getStoredBlockCheckpoints();
 
-    /* Hashes of blocks we have processed in the wallet */
-    const auto recentProcessedBlockHashes = m_synchronizationStatus.getRecentBlockHashes();
+    const auto locator = m_synchronizationStatus.getLocator();
 
-    /* If we don't have the desired 50 blocks, add on the recently processed
-       block checkpoints. This fixes us not passing the right data when
-       we are fully synced or have no store built up yet */
-    if (result.size() < Constants::LAST_KNOWN_BLOCK_HASHES_SIZE)
-    {
-        /* Copy the amount of hashes available, or the amount needed to make
-           up the difference, whichever is less */
-        const size_t numToCopy =
-            std::min(recentProcessedBlockHashes.size(), Constants::LAST_KNOWN_BLOCK_HASHES_SIZE - result.size());
-
-        std::copy(
-            recentProcessedBlockHashes.begin(),
-            recentProcessedBlockHashes.begin() + numToCopy,
-            std::back_inserter(result));
-    }
-
-    /* Infrequent checkpoints to handle deep forks */
-    const auto blockHashCheckpoints = m_synchronizationStatus.getBlockCheckpoints();
-
-    std::copy(blockHashCheckpoints.begin(), blockHashCheckpoints.end(), std::back_inserter(result));
+    std::copy(locator.begin(), locator.end(), std::back_inserter(result));
 
     return result;
 }
@@ -247,8 +273,37 @@ bool BlockDownloader::downloadBlocks()
         Logger::logger.log(stream.str(), Logger::DEBUG, {Logger::SYNC});
     }
 
-    const auto [success, blocks, topBlock] = m_daemon->getWalletSyncData(
+    const auto [success, blocks, topBlock, pruneFloor] = m_daemon->getWalletSyncData(
         blockCheckpoints, m_startHeight, m_startTimestamp, Config::config.wallet.skipCoinbaseTransactions);
+
+    /* Handle prune floor BEFORE the empty-blocks check.  When connecting to
+       a pruned node, the daemon may return zero blocks but still report a
+       prune floor.  If we don't advance m_startHeight here, we'll keep
+       requesting the same pruned range and get stuck in an infinite loop. */
+    if (success && pruneFloor > 0 && pruneFloor > m_startHeight)
+    {
+        m_pruneFloor.store(pruneFloor);
+
+        const bool prunedItemsCovered = !blocks.empty() && blocks.front().blockHeight < pruneFloor;
+
+        if (!prunedItemsCovered)
+        {
+            Logger::logger.log(
+                "Daemon prune floor at height " + std::to_string(pruneFloor) +
+                ". No wallet data for blocks " + std::to_string(m_startHeight) +
+                " to " + std::to_string(pruneFloor - 1) + ".",
+                Logger::WARNING, {Logger::SYNC, Logger::DAEMON});
+
+            m_startHeight = pruneFloor;
+
+            /* Re-request from the new start height on the next iteration
+               rather than falling through with an empty block list. */
+            if (blocks.empty())
+            {
+                return true;
+            }
+        }
+    }
 
     /* Synced, store the top block so sync status displayes correctly if
        we are not scanning coinbase tx only blocks */
@@ -261,6 +316,26 @@ bool BlockDownloader::downloadBlocks()
     if (success && blocks.empty() && topBlock && m_storedBlocks.size() == 0)
     {
         m_synchronizationStatus.storeBlockHash(topBlock->hash, topBlock->height);
+
+        /* Taking the top block is the wallet saying it has scanned as far as
+           here, which answers the date it was going to start from: it starts
+           from here. Leaving the timestamp set meant every later request still
+           asked the daemon to place that date, and a daemon that could not
+           place it answered nothing however many blocks had since been mined -
+           the wallet sat at the tip calling itself fully synced, showing no
+           transactions, and only a reset (which starts from a height) moved
+           it. A height cannot fail to be placed. */
+        if (m_startTimestamp != 0)
+        {
+            m_startTimestamp = 0;
+            m_startHeight = topBlock->height;
+
+            if (m_subWallets != nullptr)
+            {
+                m_subWallets->convertSyncTimestampToHeight(m_startTimestamp, m_startHeight);
+            }
+        }
+
         return false;
     }
     /* If we get no blocks, we are fully synced.
@@ -290,6 +365,15 @@ bool BlockDownloader::downloadBlocks()
         m_startHeight = blocks.front().blockHeight;
 
         m_subWallets->convertSyncTimestampToHeight(m_startTimestamp, m_startHeight);
+
+        /* NOTE: this used to clamp m_startHeight up to the prune floor. That
+           skipped the whole pruned range on a timestamp import: the daemon
+           takes the greater of our start height and the checkpoint, so raising
+           the start height to the floor after the first batch of pruned blocks
+           meant every height between the import point and the floor was never
+           requested, and no fork was detected because the wallet only ever
+           moved forwards. The floor is honoured by the daemon, which serves the
+           pruned range in order, so the wallet simply follows the blocks. */
     }
 
     std::stringstream stream;

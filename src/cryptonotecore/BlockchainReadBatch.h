@@ -11,10 +11,20 @@
 #include "DatabaseCacheData.h"
 #include "IReadBatch.h"
 
-#include <boost/functional/hash.hpp>
+#include <WalletTypes.h>
 
 namespace std
 {
+    namespace derogold_detail
+    {
+        /* The mixing step boost::hash_combine performs. Kept identical so the
+           bucket distribution of the maps below does not change. */
+        template<typename T> void hashCombine(std::size_t &seed, const T &value)
+        {
+            seed ^= std::hash<T> {}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        }
+    } // namespace derogold_detail
+
     template<> struct hash<std::pair<CryptoNote::IBlockchainCache::Amount, uint32_t>>
     {
         using argment_type = std::pair<CryptoNote::IBlockchainCache::Amount, uint32_t>;
@@ -22,8 +32,8 @@ namespace std
 
         result_type operator()(const argment_type &arg) const
         {
-            size_t hashValue = boost::hash_value(arg.first);
-            boost::hash_combine(hashValue, arg.second);
+            size_t hashValue = std::hash<CryptoNote::IBlockchainCache::Amount> {}(arg.first);
+            derogold_detail::hashCombine(hashValue, arg.second);
             return hashValue;
         }
     };
@@ -36,7 +46,7 @@ namespace std
         result_type operator()(const argment_type &arg) const
         {
             size_t hashValue = std::hash<Crypto::Hash> {}(arg.first);
-            boost::hash_combine(hashValue, arg.second);
+            derogold_detail::hashCombine(hashValue, arg.second);
             return hashValue;
         }
     };
@@ -79,6 +89,11 @@ namespace CryptoNote
         std::unordered_map<uint64_t, std::vector<Crypto::Hash>> blockHashesByTimestamp;
 
         KeyOutputKeyResult keyOutputKeys;
+
+        std::unordered_map<Crypto::Hash, Crypto::PublicKey> transactionPublicKeys;
+
+        /* Compact wallet-sync records stored at push time — never pruned. */
+        std::unordered_map<uint32_t, WalletTypes::WalletBlockInfo> walletSyncBlocks;
 
         std::pair<uint32_t, bool> lastBlockIndex = {0, false};
 
@@ -144,6 +159,10 @@ namespace CryptoNote
 
         const std::pair<uint32_t, bool> &getPruneFloor() const;
 
+        const std::unordered_map<Crypto::Hash, Crypto::PublicKey> &getTransactionPublicKeys() const;
+
+        const std::unordered_map<uint32_t, WalletTypes::WalletBlockInfo> &getWalletSyncBlocks() const;
+
       private:
         BlockchainReadState state;
     };
@@ -197,6 +216,12 @@ namespace CryptoNote
             requestKeyOutputInfo(IBlockchainCache::Amount amount, IBlockchainCache::GlobalOutputIndex globalIndex);
 
         BlockchainReadBatch &requestPruneFloor();
+
+        BlockchainReadBatch &requestTransactionPublicKey(const Crypto::Hash &txHash);
+
+        BlockchainReadBatch &requestTransactionPublicKeys(const std::vector<Crypto::Hash> &txHashes);
+
+        BlockchainReadBatch &requestWalletSyncBlocks(uint64_t startHeight, uint64_t endHeight);
 
         std::vector<std::string> getRawKeys() const override;
 

@@ -10,13 +10,9 @@
 #include "TransactionValidatiorState.h"
 #include "crypto/crypto.h"
 
-#include <boost/optional/optional.hpp>
-#include <boost/multi_index/composite_key.hpp>
-#include <boost/multi_index/hashed_index.hpp>
-#include <boost/multi_index/mem_fun.hpp>
-#include <boost/multi_index/member.hpp>
-#include <boost/multi_index/ordered_index.hpp>
-#include <boost/multi_index_container.hpp>
+#include <optional>
+#include <set>
+#include <unordered_map>
 #include <logging/LoggerMessage.h>
 #include <logging/LoggerRef.h>
 
@@ -66,7 +62,7 @@ namespace CryptoNote
 
             CachedTransaction cachedTransaction;
 
-            boost::optional<Crypto::Hash> paymentId;
+            std::optional<Crypto::Hash> paymentId;
 
             const Crypto::Hash &getTransactionHash() const;
         };
@@ -77,53 +73,44 @@ namespace CryptoNote
             bool operator()(const PendingTransactionInfo &lhs, const PendingTransactionInfo &rhs) const;
         };
 
-        struct TransactionHashTag
-        {
-        };
-        struct TransactionCostTag
-        {
-        };
-        struct PaymentIdTag
-        {
-        };
-
-        typedef boost::multi_index::ordered_non_unique<
-            boost::multi_index::tag<TransactionCostTag>,
-            boost::multi_index::identity<PendingTransactionInfo>,
-            TransactionPriorityComparator>
-            TransactionCostIndex;
-
-        typedef boost::multi_index::hashed_unique<
-            boost::multi_index::tag<TransactionHashTag>,
-            boost::multi_index::const_mem_fun<
-                PendingTransactionInfo,
-                const Crypto::Hash &,
-                &PendingTransactionInfo::getTransactionHash>>
-            TransactionHashIndex;
-
         struct PaymentIdHasher
         {
-            size_t operator()(const boost::optional<Crypto::Hash> &paymentId) const;
+            size_t operator()(const std::optional<Crypto::Hash> &paymentId) const;
         };
 
-        typedef boost::multi_index::hashed_non_unique<
-            boost::multi_index::tag<PaymentIdTag>,
-            BOOST_MULTI_INDEX_MEMBER(PendingTransactionInfo, boost::optional<Crypto::Hash>, paymentId),
-            PaymentIdHasher>
-            PaymentIdIndex;
+        /* Orders the pointers held by the cost view by comparing what they
+           point at. */
+        struct TransactionPriorityPtrComparator
+        {
+            bool operator()(const PendingTransactionInfo *lhs, const PendingTransactionInfo *rhs) const
+            {
+                return TransactionPriorityComparator {}(*lhs, *rhs);
+            }
+        };
 
-        typedef boost::multi_index_container<
-            PendingTransactionInfo,
-            boost::multi_index::indexed_by<TransactionHashIndex, TransactionCostIndex, PaymentIdIndex>>
-            TransactionsContainer;
+        /* Three views over one set of transactions, kept in step by hand.
+           This replaces a boost::multi_index_container with the same three
+           indexes: unique on transaction hash, ordered by mining priority, and
+           grouped by payment id.
 
-        TransactionsContainer transactions;
+           The hash map owns the transactions and is the only place they live.
+           It is node based, so the addresses the other two views hold stay
+           valid when it rehashes. Every mutation below goes through
+           insertTransaction and eraseTransaction so the views cannot drift
+           apart. */
+        std::unordered_map<Crypto::Hash, PendingTransactionInfo> m_transactions;
 
-        TransactionsContainer::index<TransactionHashTag>::type &transactionHashIndex;
+        std::multiset<const PendingTransactionInfo *, TransactionPriorityPtrComparator> m_byPriority;
 
-        TransactionsContainer::index<TransactionCostTag>::type &transactionCostIndex;
+        std::unordered_multimap<std::optional<Crypto::Hash>, const PendingTransactionInfo *, PaymentIdHasher>
+            m_byPaymentId;
 
-        TransactionsContainer::index<PaymentIdTag>::type &paymentIdIndex;
+        /* Adds to all three views. Returns false if the hash is already
+           present, matching the unique hash index. */
+        bool insertTransaction(PendingTransactionInfo &&transaction);
+
+        /* Removes from all three views. Returns false if not present. */
+        bool eraseTransaction(const Crypto::Hash &hash);
 
         mutable std::mutex m_transactionsMutex;
 

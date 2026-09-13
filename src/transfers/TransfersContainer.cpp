@@ -664,7 +664,7 @@ namespace CryptoNote
 
         std::vector<Hash> deletedTransactions;
         auto &spendingTransactionIndex = m_spentTransfers.get<SpendingTransactionIndex>();
-        auto &blockHeightIndex = m_transactions.get<1>();
+        auto &blockHeightIndex = m_transactions.get<TransactionBlockHeightIndex>();
         auto it = blockHeightIndex.end();
         while (it != blockHeightIndex.begin())
         {

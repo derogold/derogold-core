@@ -19,6 +19,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <ostream>
 #include <thread>
 #include <unordered_map>
 
@@ -41,7 +42,8 @@ public:
                           const std::string &ip,
                           uint32_t port,
                           const std::shared_ptr<CryptoNote::IDataBase> &database,
-                          DaemonConfig::DaemonConfiguration config);
+                          DaemonConfig::DaemonConfiguration config,
+                          std::shared_ptr<std::atomic<bool>> pruneTrigger = nullptr);
 
     bool start_handling()
     {
@@ -55,6 +57,12 @@ public:
     }
 
     bool exit(const std::vector<std::string> &args);
+
+    /* Runs one console command and returns what it printed, instead of
+       printing it. This is what a console attached over the RPC socket calls;
+       it goes through the same handler map as the local console, so the two
+       can never drift apart. */
+    std::string run_remote_command(const std::string &commandLine);
 
 private:
     Common::ConsoleHandler m_consoleHandler;
@@ -73,6 +81,7 @@ private:
 
     std::shared_ptr<Logging::LoggerManager> m_logManager;
     std::shared_ptr<CryptoNote::IDataBase> m_database;
+    std::shared_ptr<std::atomic<bool>> m_pruneTrigger;
 
     std::unordered_map<std::string, std::chrono::system_clock::time_point> m_bannedHosts;
     std::future<void> m_compactDbTask;
@@ -131,5 +140,23 @@ private:
 
     bool sync_height_status(const std::vector<std::string> &args);
 
+    bool sync_info(const std::vector<std::string> &args);
+
     bool save(const std::vector<std::string> &args);
+
+    /* Where command output goes. Commands write to out() rather than
+       std::cout, so the same command can print to the terminal or be captured
+       for a socket without knowing which. */
+    std::ostream *m_out = &std::cout;
+
+    std::ostream &out()
+    {
+        return *m_out;
+    }
+
+    /* One command at a time. The local console runs on its own thread and a
+       console attached over the socket runs on an httplib worker; without this
+       the two would interleave their output into the same stream, and the
+       redirect below would be visible to whichever was not expecting it. */
+    std::mutex m_commandMutex;
 };

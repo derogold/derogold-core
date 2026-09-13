@@ -123,6 +123,15 @@ namespace Logger
         {
             return;
         }
+
+        /* Decide whether this message is wanted before formatting it. The
+           timestamp and category formatting used to run for every call at every
+           level, including the ones that were then thrown away. */
+        if (level > m_logLevel)
+        {
+            return;
+        }
+
         const std::time_t now = std::time(nullptr);
         std::stringstream output;
         output << "[" << std::put_time(std::localtime(&now), "%H:%M:%S") << "] "
@@ -132,23 +141,26 @@ namespace Logger
             output << " [" << logCategoryToString(category) << "]";
         }
         output << ": " << message;
-        if (level <= m_logLevel)
+
+        /* If the user provides a callback, log to that instead */
+        if (m_callback)
         {
-            /* If the user provides a callback, log to that instead */
-            if (m_callback)
-            {
-                m_callback(output.str(), message, level, categories);
-            }
-            else
-            {
-                std::cout << output.str() << std::endl;
-            }
+            m_callback(output.str(), message, level, categories);
+        }
+        else
+        {
+            std::cout << output.str() << std::endl;
         }
     }
 
     void Logger::setLogLevel(const LogLevel level)
     {
         m_logLevel = level;
+    }
+
+    LogLevel Logger::getLogLevel() const
+    {
+        return m_logLevel;
     }
 
     void Logger::setLogCallback(

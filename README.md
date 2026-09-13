@@ -11,21 +11,7 @@
   <li><a href="#installing">Installing</a></li>
   <li><a href="#build-instructions">Build Instructions</a></li>
   <ol>
-    <li><a href="#windows-x64-only">Windows (x64 only)</a></li>
-    <ol>
-      <li><a href="#msvc-visual-studio-2022">MSVC (Visual Studio 2022)</a></li>
-      <li><a href="#mingw64-msys2">MINGW64 (msys2)</a></li>
-      <li><a href="#clang64-msys2">CLANG64 (msys2)</a></li>
-    </ol>
-    <li><a href="#linux-x64aarch64">Linux (x64/aarch64)</a></li>
-    <ol>
-      <li><a href="#gcc">GCC</a></li>
-      <li><a href="#clang">CLANG</a></li>
-    </ol>
-    <li><a href="#macos-x64-only">MacOS (x64 only)</a></li>
-    <ol>
-      <li><a href="#clang-1">CLANG</a></li>
-    </ol>
+    <li><a href="BUILDING.md">Full build guide (all platforms)</a></li>
   </ol>
   <li><a href="#docker">Docker</a></li>
   <li><a href="#pruned-node-mode">Pruned Node Mode</a></li>
@@ -65,278 +51,37 @@ If you would like to compile yourself, read on.
 
 ## Build Instructions
 
-The CMake build system will, by default, create optimized *native* builds for your particular system type when you build the software. Using this method, the binaries created provide a better experience and all together faster performance.
+No package manager and no submodules. Install a compiler, CMake and OpenSSL
+from your own distribution, then build:
 
-However, if you wish to create *portable* binaries that can be shared between systems, specify `-DARCH=default` in your CMake arguments during the build process. Note that *portable* binaries will have a noticeable difference in performance than *native* binaries. For this reason, it is always best to build for your particular system if possible.
+```sh
+# Debian / Ubuntu
+sudo apt install build-essential cmake ninja-build git libssl-dev
 
-Note that the instructions below create *native* binaries.
-
-### Windows (x64 only)
-
-#### MSVC (Visual Studio 2022)
-
-Prerequisites:
-- [Visual Studio Community 2022](https://visualstudio.microsoft.com/downloads/#visual-studio-community-2022)
-  - Note: This installs the full IDE which may take up more space. If you want a more lightweight installation, install [Build Tools for Visual Studio 2022](https://aka.ms/vs/17/release/vs_BuildTools.exe) instead.
-  - In the installer, under `Workloads` tab, select `Desktop development with C++`
-    - Ensure that under the optional component, the following is checked:
-    - `MSVC v143 - VS 2022 C++ x64/x86 build tools (latest)`
-    - `Windows 11 SDK (10.0.22621.0)` - Pick the latest one if possible.
-    - `C++ CMake tools for Windows`
-- [Build Tools for Visual Studio 2022](https://aka.ms/vs/17/release/vs_BuildTools.exe)
-  - Note: You are not required to install this if you have [Visual Studio Community/Professional/Enterprise 2022](https://visualstudio.microsoft.com/downloads/#visual-studio-community-2022) installed.
-  - In the installer, under `Workloads` tab, select `Desktop development with C++`
-    - Ensure that under the optional component, the following is checked:
-      - `MSVC v143 - VS 2022 C++ x64/x86 build tools (latest)`
-      - `Windows 11 SDK (10.0.22621.0)` - Pick the latest one if possible.
-      - `C++ CMake tools for Windows`
-- [Git](https://git-scm.com/downloads)
-  - Skip this if you have installed `Git For Windows` in the Visual Studio installer
-  - If the development console could not find git, you can always install this to resolve the issue.
-- [CMake](https://cmake.org/download/)
-  - Skip this if you have installed `C++ CMake tools for Windows` in the Visual Studio installer
-  - If the development console could not find cmake, you can always install this to resolve the issue.
-
-Building:
-- From the start menu, open 'x64 Native Tools Command Prompt for VS 2022'
-- If you need to change the default drive C: to D: for example, just type `D:` and hit enter
-- Use `cd` to change to your desired directory to store DeroGold code
-- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
-- `cd derogold`
-- `cmake --preset windows-x64-msvc-install`
-- `cmake --build --preset windows-x64-msvc-install`
-- Enjoy your build at `build/bin`
-
-Alternatively:
-- `cd derogold`
-- `cmake -D VCPKG_TARGET_TRIPLET=x64-windows-static-release -D CMAKE_INSTALL_PREFIX=build -G Visual Studio 17 2022 -T host=x64 -A x64 -S . -B build`
-- `cmake --build build -t INSTALL --config Release`
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-#### MINGW64 (msys2)
-
-Prerequisites:
-- [MSYS2](https://www.msys2.org/)
-  - Open `MSYS2 MINGW64`
-  - Run `pacman -Syu` twice (to ensure all packages are updated) The window will close the first time
-  - Run `pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-ccache git`
-
-Building:
-- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
-- `cd derogold`
-- `cmake --preset windows-x64-mingw-gcc-install`
-- `cmake --build --preset windows-x64-mingw-gcc-install`
-- Enjoy your build at `build/bin`
-
-Alternatively:
-- `cd derogold`
-- `CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=x64-mingw-static-release -D CMAKE_INSTALL_PREFIX=build -G Ninja -S . -B build`
-- `cmake --build build -t install`
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-#### CLANG64 (msys2)
-
-Prerequisites:
-- [MSYS2](https://www.msys2.org/)
-  - Open `MSYS2 CLANG64`
-  - Run `pacman -Syu` twice (to ensure all packages are updated) The window will close the first time
-  - Run `pacman -S mingw-w64-clang-x86_64-toolchain mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-ccache git`
-
-Building:
-- `git clone -b development --recursive https://github.com/derogold/derogold-core.git`
-- `cd derogold`
-- `cmake --preset windows-x64-mingw-clang-install`
-- `cmake --build --preset windows-x64-mingw-clang-install`
-- Enjoy your build at `build/bin`
-
-Alternatively:
-- `cd derogold`
-- `CC=clang CXX=clang++ cmake -D VCPKG_TARGET_TRIPLET=x64-mingw-static-release -D CMAKE_INSTALL_PREFIX=build -G Ninja -S . -B build`
-- `cmake --build build -t install`
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-### Linux (x64/aarch64)
-
-#### GCC
-
-> **⚠️ Compiler requirement:** DeroGold must be built with **GCC/G++ version 9**. Newer compiler versions are not yet supported due to cryptography compatibility issues. Install with:
-> ```bash
-> sudo apt-get install gcc-9 g++-9
-> sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 9
-> sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 9
-> sudo update-alternatives --set gcc /usr/bin/gcc-9
-> sudo update-alternatives --set g++ /usr/bin/g++-9
-> ```
-
-Prerequisites:
-- For Ubuntu: `sudo apt-get install git cmake ninja-build build-essential gcc-9 g++-9 curl zip unzip tar pkg-config`
-- (Optional) `sudo apt-get install crossbuild-essential-arm64` for cross building aarch64 target
-
-**NOTE: Ubuntu 20.04 LTS provides an outdated version of CMake hence it does not support presets.**
-
-Building via CLI:
-```bash
-#########################
-# For native x64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=x64-linux-release -G Ninja -S . -B build
+git clone https://github.com/derogold/derogold-core.git
+cd derogold-core
+cmake -G Ninja -D CMAKE_BUILD_TYPE=Release -S . -B build
 cmake --build build
-sudo cmake --install build
-
-#########################
-# For native arm64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=arm64-linux-release -G Ninja -S . -B build
-cmake --build build
-sudo cmake --install build
 ```
 
-Building via Presets:
-```bash
-#########################
-# For native x64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
+Binaries land in `build/src`.
 
-# For build only.
-cmake --preset linux-x64-gcc-all
-cmake --build --preset linux-x64-gcc-all
+RocksDB is compiled from the copy in `external/`, because the version most
+distributions package is older than this code needs. Nothing is downloaded
+during the build, but it does make the first build noticeably longer. Pass
+`-D DEROGOLD_SYSTEM_ROCKSDB=ON` to link your own copy instead, provided it is
+8.1 or newer.
 
-# For build and install.
-cmake --preset linux-x64-gcc-install
-sudo cmake --build --preset linux-x64-gcc-install
+By default the build targets the machine it is compiled on. Pass
+`-D ARCH=default` for binaries that run on other machines, at some cost in
+performance.
 
-#########################
-# For native arm64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-
-# For build only.
-cmake --preset linux-arm64-gcc-all
-cmake --build --preset linux-arm64-gcc-all
-
-# For build and install.
-cmake --preset linux-arm64-gcc-install
-sudo cmake --build --preset linux-arm64-gcc-install
-```
-
-Enjoy your build at `/usr/local/bin`
-
-You can use `--preset linux-arm64-gcc-cross-package` to cross compile for arm64/aarch64 raspberry pi. Output binaries would be stored at `build/Packaging`.
+See **[BUILDING.md](BUILDING.md)** for install commands on Fedora, Arch, macOS
+and MSYS2, the CMake presets, RocksDB options, and notes on MSVC.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
-#### CLANG 
 
-**NOTE: This build is not officially supported due to potential errors during runtime. Prefer GCC instead.**
-
-Prerequisites:
-- For Ubuntu: `sudo apt-get install git cmake ninja-build clang curl zip unzip tar pkg-config`
-
-**NOTE: Ubuntu 20.04 LTS provides an outdated version of CMake hence it does not support presets.**
-
-Building via CLI:
-```bash
-#########################
-# For native x64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-CC=clang CXX=clang++ cmake -D VCPKG_TARGET_TRIPLET=x64-linux-release-clang -D CMAKE_BUILD_TYPE=Release -D ARCH=native -G Ninja -S . -B build
-cmake --build build
-sudo cmake --install build
-
-#########################
-# For native arm64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-CC=gcc CXX=g++ cmake -D VCPKG_TARGET_TRIPLET=arm64-linux-release-clang -D CMAKE_BUILD_TYPE=Release -D ARCH=native -G Ninja -S . -B build
-cmake --build build
-sudo cmake --install build
-```
-
-Building via Presets:
-```bash
-#########################
-# For native x64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-
-# For build only.
-cmake --preset linux-x64-clang-all
-cmake --build --preset linux-x64-clang-all
-
-# For build and install.
-cmake --preset linux-x64-clang-install
-sudo cmake --build --preset linux-x64-clang-install
-
-#########################
-# For native arm64 builds
-#########################
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-
-# For build only.
-cmake --preset linux-arm64-clang-all
-cmake --build --preset linux-arm64-clang-all
-
-# For build and install.
-cmake --preset linux-arm64-clang-install
-sudo cmake --build --preset linux-arm64-clang-install
-```
-
-Enjoy your build at `/usr/local/bin`
-
-You can use `--preset linux-arm64-clang-cross-package` to cross compile for arm64/aarch64 raspberry pi. Output binaries would be stored at `build/Packaging`.
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-### MacOS (x64 only)
-
-#### CLANG
-
-**NOTE: This build is not officially supported due to MacOS transitioning to arm64 and the code do not support arm64 architecture.**
-
-Prerequisites:
-- [HomeBrew](https://brew.sh/)
-  - Install by running `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
-  - `brew install git cmake ninja llvm pkg-config`
-
-Building via CLI:
-```bash
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-CC=clang CXX=clang++ LDFLAGS="-L/usr/local/opt/llvm/lib/c++ -L/usr/local/opt/llvm/lib -lunwind" CPPFLAGS="-I/usr/local/opt/llvm/include" cmake -D VCPKG_TARGET_TRIPLET=x64-osx-release -G Ninja -S . -B build
-cmake --build build
-sudo cmake --install build
-```
-
-Building via Presets:
-```bash
-git clone -b development --recursive https://github.com/derogold/derogold-core.git
-cd derogold
-
-# For build only.
-cmake --preset osx-x64-clang-all
-cmake --build --preset osx-x64-clang-all
-
-# For build and install.
-cmake --preset osx-x64-clang-install
-sudo cmake --build --preset osx-x64-clang-install
-```
-
-<p align="right">(<a href="#top">back to top</a>)</p>
 
 ## Docker
 
@@ -356,7 +101,7 @@ docker run -d \
     -p 42069:42069 \
     -p 6969:6969 \
     -v derogold-data:/data \
-    ghcr.io/derogold/derogold-core:latest
+    ghcr.io/derogold/derogold-core:latest --data-dir=/data
 ```
 
 Available tags: `latest`, `v1.0.1.0`, etc.
@@ -386,7 +131,7 @@ docker run -d \
     -p 42069:42069 \
     -p 6969:6969 \
     -v derogold-data:/data \
-    derogoldd:latest
+    derogoldd:latest --data-dir=/data
 ```
 
 **Fast sync from height 2,700,000:**
@@ -396,7 +141,7 @@ docker run -d \
     -p 42069:42069 \
     -p 6969:6969 \
     -v derogold-data:/data \
-    derogoldd:latest --sync-from-height=2700000
+    derogoldd:latest --data-dir=/data --sync-from-height=2700000
 ```
 
 **Pruned node:**
@@ -406,7 +151,7 @@ docker run -d \
     -p 42069:42069 \
     -p 6969:6969 \
     -v derogold-data:/data \
-    derogoldd:latest --prune
+    derogoldd:latest --data-dir=/data --prune
 ```
 
 ### Useful commands
@@ -425,7 +170,11 @@ docker stop derogoldd
 docker rm derogoldd
 ```
 
-> **Note:** The blockchain data is stored in the `derogold-data` Docker volume and persists across container restarts and removals. To start fresh, remove the volume with `docker volume rm derogold-data`.
+> **Note:** `--data-dir=/data` is what puts the blockchain on the mounted
+> volume. Without it the daemon writes to `~/.DeroGold` inside the container,
+> which is lost when the container is removed. With it, the data lives in the
+> `derogold-data` volume and persists across restarts and removals. To start
+> fresh, remove the volume with `docker volume rm derogold-data`.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 
@@ -469,6 +218,116 @@ Once the node is running, use these commands from the daemon console:
 | `db_status` | Show database size and file statistics |
 
 RocksDB compaction is also triggered **automatically** by a background scheduler. The scheduler runs every 60 seconds while the node is syncing, and slows to every 30 minutes once the node is near the chain tip.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## Lite Node Mode
+
+A lite node stores full block data only from a chosen height upward, keeping just
+the indexes later blocks actually read below it. It syncs, mines, relays and
+validates like a full node, but cannot serve or rescan any height below its lite
+height — which makes it a good fit for a node running your own wallet, and a poor
+one for a public node.
+
+| Flag | Description |
+|---|---|
+| `--lite` | Enable lite mode. Permanent for the database. |
+| `--lite-height=<height>` | Height at and above which full block data is kept. Required. |
+
+```bash
+# A node for a wallet created at height 4,000,000
+./DeroGoldd --lite --lite-height=4000000
+```
+
+Unlike `--prune`, this is decided at write time and cannot be undone without
+resyncing, and it cannot be combined with `--prune` or `--daemon-mode explorer`.
+See **[LITENODE.md](LITENODE.md)** for what is kept, what is lost, and how to
+choose the height.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+## RPC over a Local Socket
+
+The daemon can serve its RPC on an AF_UNIX socket alongside the TCP port. What
+guards a TCP port is only "who can reach 127.0.0.1:6969", which on a shared
+machine is every local user; what guards a socket is the **mode on the socket
+file**.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--rpc-ipc-path=<path>` | *(off)* | Also serve the RPC on this socket |
+| `--rpc-ipc-mode=<octal>` | `0600` | Permissions on the socket file |
+| `--rpc-ipc-group=<group>` | *(none)* | Group that owns the socket file |
+| `--attach=<path>` | | Attach a console to a running daemon, instead of starting one |
+
+POSIX only. On Windows the flags are refused with a reason: `AF_UNIX` exists
+there, but the socket file carries no enforceable permissions and there is no
+`SO_PEERCRED`, so the endpoint could not be restricted to its owner.
+
+### Serving
+
+```bash
+./DeroGoldd --rpc-ipc-path /run/derogold/daemon.sock
+
+# readable by a service group rather than only the daemon's own user
+./DeroGoldd --rpc-ipc-path /run/derogold/daemon.sock \
+            --rpc-ipc-mode 0660 --rpc-ipc-group derogold
+```
+
+The TCP listener is unaffected and still comes up. A socket that cannot be
+bound is a warning, not a fatal error — the node keeps running without it.
+
+The daemon refuses to remove anything at that path that is not a socket, and
+refuses to take over a socket another process is still listening on, so a
+mistyped `--rpc-ipc-path` cannot cost you a file.
+
+### Connecting a wallet
+
+Pass the socket path where a daemon address goes. An absolute path or an
+`@name` abstract socket is recognised as one; nothing resolvable looks like
+either, so a hostname is never mistaken for a path.
+
+```bash
+./zedwallet++ --remote-daemon /run/derogold/daemon.sock
+./WalletService --daemon-address /run/derogold/daemon.sock
+./WalletApi --rpc-password <password> --daemon-address /run/derogold/daemon.sock
+./miner --daemon-address /run/derogold/daemon.sock --address <address>
+```
+
+For the wallet API that is the daemon used by requests which do not name one
+of their own; a request carrying its own `daemonHost` may put a socket path
+there just the same.
+
+An address this build cannot open - any socket path on Windows - is refused
+where it is read, saying why, rather than being resolved as a hostname and
+coming back later as a daemon that will not answer.
+
+### Attaching a console
+
+A daemon under systemd has no terminal, so its console is out of reach. `--attach`
+opens one over the socket: every line runs inside that daemon through the same
+command handler as the local console, and its output comes back.
+
+```bash
+./DeroGoldd --attach /run/derogold/daemon.sock
+```
+
+```
+Attached to socket /run/derogold/daemon.sock
+exit or quit leaves this console. stop shuts the daemon down.
+> status
+> exit
+```
+
+`exit` and `quit` leave the console without touching the daemon; `stop` shuts
+the daemon down.
+
+**Console commands are served on the socket only, never over TCP.** They change
+log levels, ban peers, start compactions and stop the node, so the people who
+may run them are exactly the people the file mode admits — the same ones who
+could type at the daemon's own console. A world-writable `--rpc-ipc-mode` is
+accepted but warned about loudly at startup, because the mode is the only thing
+guarding it.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
 

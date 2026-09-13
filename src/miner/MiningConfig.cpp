@@ -11,6 +11,7 @@
 #include "version.h"
 
 #include <algorithm>
+#include <common/IpcSocket.h>
 #include <common/Util.h>
 #include <config/CliHeader.h>
 #include <config/CryptoNoteConfig.h>
@@ -47,10 +48,10 @@ namespace CryptoNote
 
         options.add_options("Daemon")(
             "daemon-address",
-            "The daemon [host:port] combination to use for node operations. This option overrides --daemon-host and "
-            "--daemon-rpc-port",
+            "The daemon to use for node operations: a [host:port] combination, or the path of a daemon's IPC socket. "
+            "This option overrides --daemon-host and --daemon-rpc-port",
             cxxopts::value<std::string>(daemonAddress),
-            "<host:port>")(
+            "<host:port|path>")(
             "daemon-host",
             "The daemon host to use for node operations",
             cxxopts::value<std::string>(daemonHost)->default_value("127.0.0.1"),
@@ -133,6 +134,11 @@ namespace CryptoNote
             {
                 throw std::runtime_error("Could not parse --daemon-address option");
             }
+        }
+
+        if (std::string error; !Common::Ipc::validateClientAddress(daemonHost, error))
+        {
+            throw std::runtime_error("Cannot use --daemon-address " + daemonHost + ": " + error);
         }
 
         if (threadCount == 0 || threadCount > CONCURRENCY_LEVEL)

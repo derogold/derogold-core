@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <boost/uuid/uuid.hpp>
+#include <Uuid.h>
 #include <crypto/hash.h>
 #include <cstddef>
 #include <cstdint>
@@ -286,6 +286,14 @@ namespace CryptoNote
         /* Maximum allowable blocks to rewind from existing chain */
         const uint64_t MAX_BLOCK_ALLOWED_TO_REWIND = EXPECTED_NUMBER_OF_BLOCKS_PER_DAY * 3;
 
+        /* A lite node keeps no block bodies below its lite height, so it can
+           neither split nor rewind into that region - the records an undo needs
+           were never written. It must therefore stay at least this far below the
+           network top, so a reorg can never reach it. Well clear of
+           MAX_BLOCK_ALLOWED_TO_REWIND, which is three days. */
+        const uint32_t MIN_LITE_FULL_BLOCK_DEPTH =
+            static_cast<uint32_t>(EXPECTED_NUMBER_OF_BLOCKS_PER_DAY * 14);
+
         const uint64_t INPUT_NOT_SENDING = 1000;
     } // namespace parameters
 
@@ -357,6 +365,30 @@ namespace CryptoNote
     const uint32_t P2P_DEFAULT_PACKET_MAX_SIZE = 50000000; // 50000000 bytes maximum packet size
     const uint32_t P2P_DEFAULT_PEERS_IN_HANDSHAKE = 250;
 
+    /* Seed nodes are the only way back onto the network once every peer we
+       know has gone away, so they are re-asked while the node runs and not
+       just at the first start. A round is taken when no new peer could be
+       dialled and fewer than P2P_SEED_RETRY_OUT_PEERS_FLOOR outgoing
+       connections are left, and at most once per
+       P2P_SEED_RETRY_INTERVAL_SECONDS because the seeds serve everyone. */
+    const uint32_t P2P_SEED_RETRY_INTERVAL_SECONDS = 5 * 60;
+
+    const uint32_t P2P_SEED_RETRY_OUT_PEERS_FLOOR = 3;
+
+    /* Seed hostnames are looked up again this often, so a seed that changes
+       address is followed without a restart. */
+    const uint32_t P2P_SEED_RERESOLVE_INTERVAL_SECONDS = 60 * 60;
+
+    /* How long an address that would not connect is passed over for. Short
+       enough that a peer which was merely restarting comes back into play,
+       long enough that a dead one stops eating connection attempts. */
+    const uint32_t P2P_FAILED_PEER_FORGET_SECONDS = 30 * 60;
+
+    /* How often one gray peer is probed to find out whether it is still
+       there. Gray entries are hearsay from other nodes and are otherwise
+       never checked, so dead addresses circulate the network forever. */
+    const uint32_t P2P_GRAY_HOUSEKEEPING_INTERVAL_SECONDS = 30;
+
     const uint32_t P2P_DEFAULT_CONNECTION_TIMEOUT = 5000; // 5 seconds
     const uint32_t P2P_DEFAULT_PING_CONNECTION_TIMEOUT = 2000; // 2 seconds
     const uint64_t P2P_DEFAULT_INVOKE_TIMEOUT = 60 * 2 * 1000; // 2 minutes
@@ -377,7 +409,7 @@ namespace CryptoNote
 
     const std::string LICENSE_URL = "https://github.com/derogold/derogold/blob/master/LICENSE";
 
-    const static boost::uuids::uuid CRYPTONOTE_NETWORK = {
+    const static Common::Uuid CRYPTONOTE_NETWORK = {
         {0x20, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x20, 0x67, 0x65, 0x6e, 0x74, 0x6f, 0x6f, 0x20}};
 
     const char *const SEED_NODES[] = {

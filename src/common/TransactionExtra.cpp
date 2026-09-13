@@ -134,7 +134,7 @@ namespace CryptoNote
         return true;
     }
 
-    struct ExtraSerializerVisitor : public boost::static_visitor<bool>
+    struct ExtraSerializerVisitor
     {
         std::vector<uint8_t> &extra;
 
@@ -173,7 +173,7 @@ namespace CryptoNote
 
         for (const auto &tag : tx_extra_fields)
         {
-            if (!boost::apply_visitor(visitor, tag))
+            if (!std::visit(visitor, tag))
             {
                 return false;
             }

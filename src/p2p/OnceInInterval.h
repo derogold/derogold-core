@@ -33,6 +33,14 @@ namespace CryptoNote
             return true;
         }
 
+        /* Let the next call() run straight away. Used when the reason a round
+           kept failing has just gone away, so waiting out the rest of the
+           interval would serve no purpose. */
+        void reset()
+        {
+            m_lastCalled = 0;
+        }
+
       private:
         time_t m_lastCalled;
 

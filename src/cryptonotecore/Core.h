@@ -25,7 +25,9 @@
 
 #include <WalletTypes.h>
 #include <ctime>
+#include <stdexcept>
 #include <logging/LoggerMessage.h>
+#include <shared_mutex>
 #include <system/ContextGroup.h>
 #include <unordered_map>
 #include <utilities/ThreadPool.h>
@@ -34,6 +36,20 @@
 
 namespace CryptoNote
 {
+    /* Thrown when none of the block hashes a wallet sent are on this chain.
+       That is not a database failure and not a transient one: the wallet is
+       syncing a different network, or has fallen further behind than the
+       hashes it keeps go back. Retrying answers neither, so it is told apart
+       from the failures that retrying does answer. */
+    class NoCommonAncestorError : public std::runtime_error
+    {
+      public:
+        NoCommonAncestorError():
+            std::runtime_error("No block in common with the requesting wallet")
+        {
+        }
+    };
+
     class Core : public ICore, public ICoreInformation
     {
       public:
@@ -60,6 +76,10 @@ namespace CryptoNote
         virtual uint64_t getBlockTimestampByIndex(uint32_t blockIndex) const override;
 
         virtual bool hasBlock(const Crypto::Hash &blockHash) const override;
+
+        /* hasBlock without taking m_chainMutex, for callers that already hold
+           it. A shared mutex is not recursive, so addBlock must use this. */
+        bool hasBlockUnsafe(const Crypto::Hash &blockHash) const;
 
         virtual BlockTemplate getBlockByIndex(uint32_t index) const override;
 
@@ -112,7 +132,8 @@ namespace CryptoNote
             const uint64_t blockCount,
             const bool skipCoinbaseTransactions,
             std::vector<WalletTypes::WalletBlockInfo> &walletBlocks,
-            std::optional<WalletTypes::TopBlock> &topBlockInfo) const override;
+            std::optional<WalletTypes::TopBlock> &topBlockInfo,
+            uint64_t &resolvedStartIndex) const override;
 
         virtual bool getRawBlocks(
             const std::vector<Crypto::Hash> &knownBlockHashes,
@@ -121,7 +142,15 @@ namespace CryptoNote
             const uint64_t blockCount,
             const bool skipCoinbaseTransactions,
             std::vector<RawBlock> &walletBlocks,
-            std::optional<WalletTypes::TopBlock> &topBlockInfo) const override;
+            std::optional<WalletTypes::TopBlock> &topBlockInfo,
+            uint64_t &resolvedStartIndex) const override;
+
+        virtual std::vector<WalletTypes::WalletBlockInfo> getPrunedWalletBlocks(
+            uint64_t startHeight,
+            uint64_t endHeight,
+            bool skipCoinbaseTransactions) const override;
+
+        virtual uint64_t getMinRawBlockHeight(uint64_t fromHeight) const override;
 
         virtual bool getTransactionsStatus(
             std::unordered_set<Crypto::Hash> transactionHashes,
@@ -441,6 +470,20 @@ namespace CryptoNote
         void cutSegment(IBlockchainCache &segment, uint32_t startIndex);
         
         std::mutex m_submitBlockMutex;
+
+        /* Guards the chain structures - chainsLeaves, chainsStorage and
+           mainChainSet - and the segments they point at. addBlock takes it
+           exclusively; every reader takes it shared. Mutable because the
+           readers are const.
+
+           The RPC server answers on httplib worker threads and calls straight
+           into these, so without this a reorg landing between two reads hands
+           the caller data from two different chains. */
+        mutable std::shared_mutex m_chainMutex;
+
+        /* getBlockDetails(hash) without the lock, for the callers that already
+           hold it: the two public overloads and fillQueryBlockDetails. */
+        BlockDetails getBlockDetailsInternal(const Crypto::Hash &blockHash) const;
     };
 
 } // namespace CryptoNote

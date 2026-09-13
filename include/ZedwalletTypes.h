@@ -43,29 +43,10 @@ struct WalletInfo
     CryptoNote::WalletGreen &wallet;
 };
 
-struct Config
-{
-    /* Was the wallet file specified on CLI */
-    bool walletGiven = false;
-
-    /* Was the wallet pass specified on CLI */
-    bool passGiven = false;
-
-    /* Should we log walletd logs to a file */
-    bool debug = false;
-
-    /* The daemon host */
-    std::string host = "127.0.0.1";
-
-    /* The daemon port */
-    int port = CryptoNote::RPC_DEFAULT_PORT;
-
-    /* The wallet file path */
-    std::string walletFile = "";
-
-    /* The wallet password */
-    std::string walletPass = "";
-};
+/* The old zedwallet's Config lived here. Nothing has constructed it since
+   zedwallet++ arrived with its own ZedConfig, and a struct by that name in the
+   global namespace collides with the Config namespace that carries the real
+   runtime settings - any translation unit reaching both fails to compile. */
 
 struct AddressBookEntry
 {
@@ -114,7 +95,7 @@ struct AddressBookEntry
 /* An address book is a vector of address book entries */
 typedef std::vector<AddressBookEntry> AddressBook;
 
-/* This borrows from haskell, and is a nicer boost::optional class. We either
+/* This borrows from haskell, and is a nicer std::optional class. We either
    have Just a value, or Nothing.
 
    Example usage follows.

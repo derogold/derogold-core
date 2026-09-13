@@ -85,18 +85,33 @@ namespace WalletTypes
         /* The hash of the block */
         Crypto::Hash blockHash;
 
+        /* The hash of the block before it, so the wallet can tell whether what
+           it has been sent attaches to the chain it holds. Optional because
+           the records a pruned daemon rebuilds do not have it, and because a
+           daemon predating the field will not send one - absent means "cannot
+           be checked", never "does not match". */
+        std::optional<Crypto::Hash> blockPrevHash;
+
         /* The timestamp of the block */
         uint64_t blockTimestamp;
 
         size_t memoryUsage() const
         {
             const size_t txUsage = std::accumulate(
-                transactions.begin(), transactions.end(), sizeof(transactions), [](const auto acc, const auto item) {
-                    return acc + item.memoryUsage();
-                });
-            return coinbaseTransaction ? coinbaseTransaction->memoryUsage()
-                                       : sizeof(coinbaseTransaction) + txUsage + sizeof(blockHeight) + sizeof(blockHash)
-                                             + sizeof(blockTimestamp);
+                transactions.begin(),
+                transactions.end(),
+                sizeof(transactions),
+                [](const size_t acc, const RawTransaction &item) { return acc + item.memoryUsage(); });
+
+            /* The coinbase transaction is additional to the block's own fields
+               and its transaction list, not an alternative to them. Returning
+               only the coinbase size when one was present under-reported every
+               block with a coinbase to roughly a hundred bytes, which defeated
+               the downloader's memory cap and let it run far ahead of
+               processing on transaction-heavy ranges. */
+            return sizeof(coinbaseTransaction) + txUsage + sizeof(blockHeight) + sizeof(blockHash)
+                   + sizeof(blockTimestamp)
+                   + (coinbaseTransaction ? coinbaseTransaction->memoryUsage() : 0);
         }
     };
 
@@ -160,7 +175,7 @@ namespace WalletTypes
             writer.Key("transactionIndex");
             writer.Uint64(transactionIndex);
             writer.Key("globalOutputIndex");
-            writer.Uint64(globalOutputIndex.value_or(0));
+            writer.Uint64(globalOutputIndex.value_or(UINT64_MAX));
             writer.Key("key");
             key.toJSON(writer);
             writer.Key("spendHeight");
@@ -180,7 +195,10 @@ namespace WalletTypes
             blockHeight = getUint64FromJSON(j, "blockHeight");
             transactionPublicKey.fromString(getStringFromJSON(j, "transactionPublicKey"));
             transactionIndex = getUint64FromJSON(j, "transactionIndex");
-            globalOutputIndex = getUint64FromJSON(j, "globalOutputIndex");
+            {
+                const uint64_t idx = getUint64FromJSON(j, "globalOutputIndex");
+                globalOutputIndex = (idx == UINT64_MAX) ? std::nullopt : std::optional<uint64_t>(idx);
+            }
             key.fromString(getStringFromJSON(j, "key"));
             spendHeight = getUint64FromJSON(j, "spendHeight");
             unlockTime = getUint64FromJSON(j, "unlockTime");
@@ -394,6 +412,19 @@ namespace WalletTypes
         uint32_t peerCount;
         /* The hashrate (based on the last block the daemon has synced) */
         uint64_t lastKnownHashrate;
+        /* Empty when nothing is wrong. Otherwise why the daemon will not serve
+           this wallet blocks - a reason retrying will not change, so it has to
+           reach whoever is watching rather than sit in a log. */
+        std::string syncError;
+        /* How many chain reorganisations this run has resolved. Only ever
+           increases, so a caller polling it can tell one happened between two
+           polls - which matters because a reorg silently withdraws
+           transactions it had already reported as confirmed. Counts this run
+           only, and starts again when the wallet is reopened. */
+        uint64_t forkCount;
+        /* Where the most recent one was, and how many blocks it discarded. */
+        uint64_t lastForkHeight;
+        uint64_t lastForkDepth;
     };
 
     /* A structure just used to display locked balance, due to change from
@@ -459,6 +490,10 @@ namespace WalletTypes
         {
             j["coinbaseTX"] = *(w.coinbaseTransaction);
         }
+        if (w.blockPrevHash)
+        {
+            j["blockPrevHash"] = *(w.blockPrevHash);
+        }
     }
 
     inline void from_json(const nlohmann::json &j, WalletBlockInfo &w)
@@ -470,6 +505,10 @@ namespace WalletTypes
         w.transactions = j.at("transactions").get<std::vector<RawTransaction>>();
         w.blockHeight = j.at("blockHeight").get<uint64_t>();
         w.blockHash = j.at("blockHash").get<Crypto::Hash>();
+        if (j.find("blockPrevHash") != j.end())
+        {
+            w.blockPrevHash = j.at("blockPrevHash").get<Crypto::Hash>();
+        }
         w.blockTimestamp = j.at("blockTimestamp").get<uint64_t>();
     }
 
@@ -536,6 +575,16 @@ namespace WalletTypes
     inline void to_json(nlohmann::json &j, const KeyOutput &k)
     {
         j = {{"key", k.key}, {"amount", k.amount}};
+
+        /* Emit the global output index when we have it. The daemon knows this
+           value at block-push time and stores it in the compact wallet-sync
+           archive, but dropping it here meant every output served from that
+           archive reached the wallet with no index, leaving pruned-range inputs
+           permanently unspendable. from_json already reads this key back. */
+        if (k.globalOutputIndex)
+        {
+            j["globalIndex"] = *k.globalOutputIndex;
+        }
     }
 
     inline void from_json(const nlohmann::json &j, KeyOutput &k)

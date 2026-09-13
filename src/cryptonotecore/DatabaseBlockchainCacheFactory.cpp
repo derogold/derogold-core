@@ -13,9 +13,11 @@ namespace CryptoNote
 {
     DatabaseBlockchainCacheFactory::DatabaseBlockchainCacheFactory(
         IDataBase &database,
-        const std::shared_ptr<Logging::ILogger> &logger) :
+        const std::shared_ptr<Logging::ILogger> &logger,
+        const uint32_t liteHeight) :
         database(database),
-        logger(logger)
+        logger(logger),
+        liteHeight(liteHeight)
     {
     }
 
@@ -24,7 +26,7 @@ namespace CryptoNote
     std::unique_ptr<IBlockchainCache>
         DatabaseBlockchainCacheFactory::createRootBlockchainCache(const Currency &currency)
     {
-        return std::make_unique<DatabaseBlockchainCache>(currency, database, *this, logger);
+        return std::make_unique<DatabaseBlockchainCache>(currency, database, *this, logger, liteHeight);
     }
 
     std::unique_ptr<IBlockchainCache> DatabaseBlockchainCacheFactory::createBlockchainCache(

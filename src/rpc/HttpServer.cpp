@@ -6,7 +6,8 @@
 
 #include "HttpServer.h"
 
-#include <boost/scope_exit.hpp>
+#include "common/ScopeExit.h"
+
 #include <http/HttpParser.h>
 #include <system/InterruptedException.h>
 #include <system/Ipv4Address.h>
@@ -60,10 +61,11 @@ namespace CryptoNote
             }
 
             m_connections.insert(&connection);
-            BOOST_SCOPE_EXIT_ALL(this, &connection)
-            {
-                m_connections.erase(&connection);
-            };
+
+            /* Drop the connection from the set on the way out, however this
+               scope is left. Replaces BOOST_SCOPE_EXIT_ALL. */
+            const auto eraseOnExit = Tools::ScopeExit([this, &connection] { m_connections.erase(&connection); });
+            (void) eraseOnExit;
 
             workingContextGroup.spawn(std::bind(&HttpServer::acceptLoop, this));
 

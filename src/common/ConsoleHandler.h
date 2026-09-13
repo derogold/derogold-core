@@ -73,6 +73,11 @@ namespace Common
 
         bool runCommand(const std::vector<std::string> &cmdAndArgs);
 
+        /* Splits a typed line the way the console does. Exposed because a
+           console reached over a socket has to tokenise the same way the local
+           one does, and two copies of this would eventually disagree. */
+        static std::vector<std::string> splitCommandLine(const std::string &cmd);
+
         void start(
             bool startThread = true,
             const std::string &prompt = "",

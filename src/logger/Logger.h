@@ -47,6 +47,10 @@ namespace Logger
 
         void setLogLevel(LogLevel level);
 
+        /* The level currently in effect. Lets callers skip building an
+           expensive message that would only be discarded. */
+        LogLevel getLogLevel() const;
+
         void setLogCallback(const std::function<void(std::string prettyMessage,
                                                      std::string message,
                                                      LogLevel level,

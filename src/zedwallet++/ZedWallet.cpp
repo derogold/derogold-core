@@ -5,6 +5,7 @@
 
 #include <common/SignalHandler.h>
 #include <config/CliHeader.h>
+#include <cstdlib>
 #include <iostream>
 #include <utilities/ColouredMsg.h>
 #include <zedwallet++/Menu.h>
@@ -101,14 +102,35 @@ int main(int argc, char **argv)
             return 0;
         }
 
+        /* Said here rather than left in the log, because the wallet will
+           otherwise look like it is working: it syncs, it reports itself up to
+           date, and the coinbase transactions simply are not there. */
+        if (walletBackend->coinbaseScanMissedBlocks())
+        {
+            std::cout << WarningMsg("\nThis wallet was synced without coinbase scanning. Blocks holding\n"
+                                    "nothing but a coinbase transaction were never sent to it, so any\n"
+                                    "coinbase transactions it already received will not appear.\n\n"
+                                    "Run reset to find them.\n")
+                      << std::endl;
+        }
+
         /* Launch the thread which watches for the shutdown signal */
         ctrlCWatcher =
             std::thread([&ctrl_c, &stop, &walletBackend = walletBackend] { shutdown(ctrl_c, stop, walletBackend); });
 
         /* Trigger the shutdown signal if ctrl+c is used
            We do the actual handling in a separate thread to handle stuff not
-           being re-entrant. */
-        Tools::SignalHandler::install([&ctrl_c] { ctrl_c = true; });
+           being re-entrant.
+           Second Ctrl+C force-exits immediately in case the graceful shutdown
+           stalls (e.g. waiting on a stuck daemon connection). */
+        Tools::SignalHandler::install([&ctrl_c] {
+            static std::atomic<bool> s_alreadyShuttingDown(false);
+            if (s_alreadyShuttingDown.exchange(true))
+            {
+                std::_Exit(1);
+            }
+            ctrl_c = true;
+        });
 
         /* Don't explicitly sync in foreground if it's a new wallet */
         if (sync)

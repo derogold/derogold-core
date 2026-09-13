@@ -1,4 +1,9 @@
 build/
+build-*/
+
+# Left over from the old vcpkg-based build. Nothing references it any more,
+# so the directory can be deleted.
+vcpkg/
 
 # Created by https://www.toptal.com/developers/gitignore/api/cmake,c++,visualstudio,visualstudiocode,clion+all,macos
 # Edit at https://www.toptal.com/developers/gitignore?templates=cmake,c++,visualstudio,visualstudiocode,clion+all,macos
@@ -593,3 +598,13 @@ FodyWeavers.xsd
 
 # End of https://www.toptal.com/developers/gitignore/api/cmake,c++,visualstudio,visualstudiocode,clion+all,macos
 
+
+# Local syntax-check helpers, not part of the build.
+.syntax-check.sh
+.syntax-sweep.sh
+
+# Everything under external/ is vendored source, not build output. Several of
+# the generic rules above (Makefile, [Bb]ackup/, *.a, [Bb]in/, [Ll]og/ and so
+# on) match real files in those trees and would silently drop them from a
+# clone, which then fails to build with a missing source file.
+!external/**

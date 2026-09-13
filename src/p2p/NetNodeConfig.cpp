@@ -66,6 +66,8 @@ namespace CryptoNote
         hideMyPort = false;
         configFolder = Tools::getDefaultDataDirectory();
         p2pStateReset = false;
+        outPeers = CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT;
+        inPeers = CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT;
     }
 
     bool NetNodeConfig::init(
@@ -79,7 +81,9 @@ namespace CryptoNote
         const std::vector<std::string> addExclusiveNodes,
         const std::vector<std::string> addPriorityNodes,
         const std::vector<std::string> addSeedNodes,
-        const bool p2pResetPeerState)
+        const bool p2pResetPeerState,
+        const uint32_t outPeersCount,
+        const uint32_t inPeersCount)
     {
         bindIp = interface;
         bindPort = port;
@@ -89,6 +93,8 @@ namespace CryptoNote
         configFolder = dataDir;
         p2pStateFilename = CryptoNote::parameters::P2P_NET_DATA_FILENAME;
         p2pStateReset = p2pResetPeerState;
+        outPeers = outPeersCount;
+        inPeers = inPeersCount;
 
         if (!addPeers.empty())
         {
@@ -114,11 +120,18 @@ namespace CryptoNote
             }
         }
 
-        if (!addSeedNodes.empty())
+        /* Seeds are kept as text as well: NodeServer resolves them itself, so
+           --seed-node takes a hostname and not only an ip:port. Whatever does
+           parse as an ip:port is still filled into seedNodes for the callers
+           that want addresses without resolving anything. */
+        seedNodeAddresses = addSeedNodes;
+
+        for (const std::string &seed : addSeedNodes)
         {
-            if (!parsePeersAndAddToNetworkContainer(addSeedNodes, seedNodes))
+            NetworkAddress networkAddress = NetworkAddress();
+            if (parsePeerFromString(networkAddress, seed))
             {
-                return false;
+                seedNodes.push_back(networkAddress);
             }
         }
 
@@ -175,6 +188,11 @@ namespace CryptoNote
         return seedNodes;
     }
 
+    std::vector<std::string> NetNodeConfig::getSeedNodeAddresses() const
+    {
+        return seedNodeAddresses;
+    }
+
     bool NetNodeConfig::getHideMyPort() const
     {
         return hideMyPort;
@@ -183,6 +201,16 @@ namespace CryptoNote
     std::string NetNodeConfig::getConfigFolder() const
     {
         return configFolder;
+    }
+
+    uint32_t NetNodeConfig::getOutPeers() const
+    {
+        return outPeers;
+    }
+
+    uint32_t NetNodeConfig::getInPeers() const
+    {
+        return inPeers;
     }
 
 } // namespace CryptoNote

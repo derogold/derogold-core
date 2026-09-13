@@ -17,9 +17,12 @@
 #include "logging/LoggerRef.h"
 #include "p2p/OnceInInterval.h"
 
-#include <boost/functional/hash.hpp>
-#include <boost/uuid/uuid.hpp>
+#include <Uuid.h>
+#include <atomic>
 #include <functional>
+#include <map>
+#include <mutex>
+#include <thread>
 #include <system/Context.h>
 #include <system/ContextGroup.h>
 #include <system/Dispatcher.h>
@@ -61,7 +64,7 @@ namespace CryptoNote
         P2pMessage(P2pMessage &&msg):
             type(msg.type),
             command(msg.command),
-            buffer(msg.buffer),
+            buffer(std::move(msg.buffer)),
             returnCode(msg.returnCode)
         {
         }
@@ -75,7 +78,10 @@ namespace CryptoNote
 
         uint32_t command;
 
-        const BinaryArray buffer;
+        /* Not const: a const member silently turned every move of this message
+           into a copy, so each queued block response was duplicated in full on
+           its way to the send queue. */
+        BinaryArray buffer;
 
         int32_t returnCode;
     };
@@ -124,10 +130,22 @@ namespace CryptoNote
 
         uint64_t writeDuration(TimePoint now) const;
 
+        /* Milliseconds since we last read anything from this peer. */
+        uint64_t readIdleDuration(TimePoint now) const;
+
+        /* Called by the connection handler after every command it reads. */
+        void markRead();
+
       private:
         Logging::LoggerRef logger;
 
         TimePoint writeOperationStartTime;
+
+        /* When we last read a command from this peer. Only the write side was
+           tracked, so a peer that accepted our request and then went quiet was
+           never noticed: it sat in the synchronizing state holding one of the
+           few outgoing slots for the lifetime of the process. */
+        TimePoint lastReadTime = Clock::now();
 
         System::Event queueEvent;
 
@@ -146,7 +164,9 @@ namespace CryptoNote
             CryptoNote::CryptoNoteProtocolHandler &payload_handler,
             std::shared_ptr<Logging::ILogger> log);
 
-        ~NodeServer() override = default;
+        /* Not defaulted: the seed resolver thread has to be joined before the
+           members it captures go away. */
+        ~NodeServer() override;
 
         bool run();
 
@@ -173,6 +193,8 @@ namespace CryptoNote
         uint64_t get_connections_count() override;
 
         size_t get_outgoing_connections_count();
+
+        size_t get_incoming_connections_count();
 
         PeerlistManager &getPeerlistManager()
         {
@@ -249,7 +271,7 @@ namespace CryptoNote
         virtual void relay_notify_to_all(
             int command,
             const BinaryArray &data_buff,
-            const boost::uuids::uuid *excludeConnection) override;
+            const Common::Uuid *excludeConnection) override;
 
         virtual bool invoke_notify_to_peer(
             int command,
@@ -262,17 +284,15 @@ namespace CryptoNote
         virtual void externalRelayNotifyToAll(
             int command,
             const BinaryArray &data_buff,
-            const boost::uuids::uuid *excludeConnection) override;
+            const Common::Uuid *excludeConnection) override;
 
         virtual void externalRelayNotifyToList(
             int command,
             const BinaryArray &data_buff,
-            const std::list<boost::uuids::uuid> relayList) override;
+            const std::list<Common::Uuid> relayList) override;
 
         //-----------------------------------------------------------------------------------------------
         bool handleConfig(const NetNodeConfig &config);
-
-        bool append_net_address(std::vector<NetworkAddress> &nodes, const std::string &addr);
 
         bool idle_worker();
 
@@ -288,6 +308,27 @@ namespace CryptoNote
         bool fix_time_delta(std::list<PeerlistEntry> &local_peerlist, time_t local_time, int64_t &delta);
 
         bool connections_maker();
+
+        bool connect_to_seeds();
+
+        /* Turns the seed hostnames into addresses. Runs on the resolver thread
+           as well as in init(), so it touches nothing but its arguments. */
+        void resolve_seed_nodes(const std::vector<std::string> &extraHosts, std::vector<NetworkAddress> &nodes);
+
+        void start_seed_resolve();
+
+        void collect_seed_resolve_result();
+
+        void join_seed_resolve_thread();
+
+        /* An address that just refused a connection is passed over for
+           P2P_FAILED_PEER_FORGET_SECONDS, so a handful of dead peers cannot
+           consume every connection attempt round after round. */
+        bool is_addr_recently_failed(const NetworkAddress &addr);
+
+        void mark_addr_failed(const NetworkAddress &addr);
+
+        bool gray_peerlist_housekeeping();
 
         bool make_new_connection_from_peerlist(bool use_white_list);
 
@@ -310,7 +351,7 @@ namespace CryptoNote
         // debug functions
         std::string print_connections_container();
 
-        typedef std::unordered_map<boost::uuids::uuid, P2pConnectionContext, boost::hash<boost::uuids::uuid>>
+        typedef std::unordered_map<Common::Uuid, P2pConnectionContext>
             ConnectionContainer;
 
         typedef ConnectionContainer::iterator ConnectionIterator;
@@ -319,7 +360,7 @@ namespace CryptoNote
 
         void acceptLoop();
 
-        void connectionHandler(const boost::uuids::uuid &connectionId, P2pConnectionContext &connection);
+        void connectionHandler(const Common::Uuid &connectionId, P2pConnectionContext &connection);
 
         void writeHandler(P2pConnectionContext &ctx);
 
@@ -362,6 +403,13 @@ namespace CryptoNote
 
         bool m_hide_my_port;
 
+        /* --out-peers: how many outgoing connections the connection maker aims
+           for. --in-peers: how many incoming ones the listener accepts before
+           turning peers away. */
+        uint32_t m_targetOutgoingConnections;
+
+        uint32_t m_maxIncomingConnections;
+
         std::string m_p2p_state_filename;
 
         bool m_p2p_state_reset;
@@ -389,6 +437,12 @@ namespace CryptoNote
         // OnceInInterval m_peer_handshake_idle_maker_interval;
         OnceInInterval m_connections_maker_interval;
 
+        /* The connection maker runs every second; this keeps the seed rounds it
+           can trigger down to one per P2P_SEED_RETRY_INTERVAL_SECONDS. */
+        OnceInInterval m_seed_retry_interval;
+
+        OnceInInterval m_gray_housekeeping_interval;
+
         OnceInInterval m_peerlist_store_interval;
 
         System::Timer m_timedSyncTimer;
@@ -407,10 +461,34 @@ namespace CryptoNote
 
         std::vector<NetworkAddress> m_seed_nodes;
 
+        /* Seed hostnames, kept so they can be looked up again: a seed that
+           moves, or a name that would not resolve when the daemon started
+           before the network was up, must not be lost for good. Resolution
+           happens on m_seedResolveThread because getaddrinfo blocks, and the
+           dispatcher thread cannot afford to stall on a dead DNS server. */
+        std::vector<std::string> m_seed_node_hosts;
+
+        std::thread m_seedResolveThread;
+
+        std::mutex m_seedResolveMutex;
+
+        std::vector<NetworkAddress> m_seedResolveResult;
+
+        bool m_seedResolveReady;
+
+        std::atomic<bool> m_seed_resolve_in_flight;
+
+        uint64_t m_seed_resolve_due;
+
         std::list<PeerlistEntry> m_command_line_peers;
+
+        /* Address -> when it last refused us. Entries expire on lookup, and the
+           map is swept when it outgrows the gray list so address churn cannot
+           make it grow without bound. */
+        std::map<NetworkAddress, time_t> m_recentlyFailedPeers;
 
         uint64_t m_peer_livetime;
 
-        boost::uuids::uuid m_network_id;
+        Common::Uuid m_network_id;
     };
 } // namespace CryptoNote
