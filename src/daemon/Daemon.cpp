@@ -498,7 +498,9 @@ int main(int argc, char *argv[])
 
         // create objects and link them
         CryptoNote::CurrencyBuilder currencyBuilder(logManager);
-        const bool explorerMode = config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER;
+        const bool explorerMode = config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER ||
+                                  config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER_DETAILED;
+        const bool explorerDetailedMode = config.daemonMode == DaemonConfiguration::DAEMON_MODE_EXPLORER_DETAILED;
         currencyBuilder.isBlockexplorer(explorerMode);
 
         try
@@ -867,7 +869,8 @@ int main(int argc, char *argv[])
             }
         }
 
-        RpcMode rpcMode = explorerMode ? RpcMode::BlockExplorerEnabled : RpcMode::Default;
+        RpcMode rpcMode = explorerDetailedMode ? RpcMode::AllMethodsEnabled :
+                          explorerMode ? RpcMode::BlockExplorerEnabled : RpcMode::Default;
 
         RpcServer rpcServer(config.rpcPort,
                             config.rpcInterface,
