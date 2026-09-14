@@ -2640,6 +2640,18 @@ namespace CryptoNote
                 return { 0, RawBlock(), stream.str() };
             }
 
+            /* Reject absurd block lengths before allocating to prevent OOM */
+            if (rawBlockLen > parameters::CRYPTONOTE_MAX_BLOCK_BLOB_SIZE)
+            {
+                std::stringstream stream;
+
+                stream << "Blockchain import file is invalid, rawBlockLen "
+                       << rawBlockLen << " exceeds maximum allowed block blob size at height "
+                       << blockIndex;
+
+                return { 0, RawBlock(), stream.str() };
+            }
+
             /* Allocate space for us to read in the raw block */
             std::string rawBlockStr;
             rawBlockStr.resize(rawBlockLen);

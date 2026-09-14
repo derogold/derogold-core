@@ -36,6 +36,7 @@
     #undef ERROR
     #include <crtdbg.h>
 #else
+    #include <sys/resource.h>
     #include <unistd.h>
 #endif
 #include <atomic>
@@ -118,6 +119,25 @@ int main(int argc, char *argv[])
 
     // Load in the CLI specified parameters again to overwrite anything from the config file
     handleSettings(argc, argv, config);
+
+#if !defined(WIN32)
+    /* Raise the open-file-descriptor limit as high as the hard limit allows.
+     * RocksDB compaction opens SST files outside the table-cache, so the OS
+     * per-process limit must accommodate concurrent compaction FDs in addition
+     * to the configured max_open_files table cache.  Changing ulimit in a
+     * parent shell has no effect on an already-running process; doing it here
+     * ensures the limit is set correctly regardless of how the daemon was
+     * launched (shell, systemd, etc.). */
+    {
+        struct rlimit rl {};
+        if (getrlimit(RLIMIT_NOFILE, &rl) == 0)
+        {
+            const rlim_t desired = 65536;
+            rl.rlim_cur = (rl.rlim_max == RLIM_INFINITY || rl.rlim_max >= desired) ? desired : rl.rlim_max;
+            setrlimit(RLIMIT_NOFILE, &rl); // best-effort; failure is non-fatal
+        }
+    }
+#endif
 
     const auto logManager = std::make_shared<LoggerManager>();
     LoggerRef logger(logManager, "daemon");

@@ -363,10 +363,14 @@ namespace CryptoNote
         cfOptions.min_write_buffer_number_to_merge = 2;
         // Reduce write stalls by allowing more immutable memtables.
         cfOptions.max_write_buffer_number = 6;
-        // Delay compaction trigger slightly to improve write throughput.
-        cfOptions.level0_file_num_compaction_trigger = 20;
-        cfOptions.level0_slowdown_writes_trigger = 30;
-        cfOptions.level0_stop_writes_trigger = 40;
+        // Keep L0 file count low so compaction jobs stay small (fewer
+        // simultaneous open FDs per compaction job).  A trigger of 4 is the
+        // RocksDB default; the previous value of 20 let hundreds of L0 files
+        // accumulate during initial sync, causing compaction to open them all
+        // at once and exhausting per-process file descriptors.
+        cfOptions.level0_file_num_compaction_trigger = 4;
+        cfOptions.level0_slowdown_writes_trigger = 20;
+        cfOptions.level0_stop_writes_trigger = 36;
 
         cfOptions.target_file_size_base = std::max<uint64_t>(config.writeBufferSize / 2, 8ULL * 1024 * 1024);
         cfOptions.max_bytes_for_level_base = std::max<uint64_t>(config.writeBufferSize * 4, 64ULL * 1024 * 1024);
