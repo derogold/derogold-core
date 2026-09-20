@@ -7,11 +7,13 @@
 #include "CryptoTypes.h"
 #include "common/StringTools.h"
 #include "crypto/crypto.h"
+#include "snapshot/SnapshotCodec.h"
 
 #include <assert.h>
 #include <chrono>
 #include <config/CliHeader.h>
 #include <cxxopts.hpp>
+#include <functional>
 #include <iostream>
 
 #define PERFORMANCE_ITERATIONS 1000
@@ -273,6 +275,227 @@ void benchmarkGenerateKeyDerivation()
     std::cout << "Time to perform generateKeyDerivation: " << timePerDerivation / 1000.0 << " ms" << std::endl;
 }
 
+template<typename Pod> Pod podFromSequentialBytes(uint8_t first)
+{
+    Pod pod {};
+    auto *bytes = reinterpret_cast<uint8_t *>(&pod);
+    for (size_t i = 0; i < sizeof(Pod); ++i)
+    {
+        bytes[i] = static_cast<uint8_t>(first + i);
+    }
+    return pod;
+}
+
+template<typename Pod> Pod podFromHexOrExit(const std::string &hex)
+{
+    Pod pod {};
+    if (!Common::podFromHex(hex, pod))
+    {
+        std::cout << "Failed to parse test hex: " << hex << std::endl;
+        exit(1);
+    }
+    return pod;
+}
+
+void requireEqual(const std::string &label, const std::string &actual, const std::string &expected)
+{
+    if (actual != expected)
+    {
+        std::cout << label << " mismatch\nExpected: " << expected << "\nActual:   " << actual << std::endl;
+        exit(1);
+    }
+}
+
+void requireThrows(const std::string &label, const std::function<void()> &fn)
+{
+    try
+    {
+        fn();
+    }
+    catch (const CryptoNote::Snapshot::FormatError &)
+    {
+        return;
+    }
+
+    std::cout << label << " did not fail closed" << std::endl;
+    exit(1);
+}
+
+void runSnapshotCodecTests()
+{
+    using namespace CryptoNote::Snapshot;
+
+    const std::string expectedOutputHex =
+        "44474f55543030312a0000000000000007000000101112131415161718191a1b1c1d1e1f"
+        "202122232425262728292a2b2c2d2e2f404142434445464748494a4b4c4d4e4f505152"
+        "535455565758595a5b5c5d5e5f02005b33290000000000";
+    const std::string expectedOutputSha =
+        "806ecad704f3df2f2248c54d109d5b23da9ce3ecbf2c938dd775b8ea98412b8f";
+
+    OutputRecord output;
+    output.amount = 42;
+    output.globalIndex = 7;
+    output.publicKey = podFromSequentialBytes<Crypto::PublicKey>(0x10);
+    output.transactionHash = podFromSequentialBytes<Crypto::Hash>(0x40);
+    output.transactionOutputIndex = 2;
+    output.unlockTime = 2700123;
+
+    const Bytes outputBytes = encodeOutputRecord(output);
+    requireEqual("snapshot output bytes", Common::toHex(outputBytes), expectedOutputHex);
+    requireEqual("snapshot output sha256", hashToHex(sha256(outputBytes)), expectedOutputSha);
+    const OutputRecord parsedOutput = parseOutputRecord(outputBytes);
+    requireEqual("snapshot output round trip", Common::toHex(encodeOutputRecord(parsedOutput)), expectedOutputHex);
+
+    const std::string expectedKeyImageHex =
+        "44474b4930303031a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7"
+        "b8b9babbbcbdbebfe0322900";
+    const std::string expectedKeyImageSha =
+        "c01cada63061278450bd9772c8a03a379c9400c1d41def1a5a8b2113b8ea6e10";
+
+    KeyImageRecord keyImage;
+    keyImage.keyImage = podFromSequentialBytes<Crypto::KeyImage>(0xa0);
+    keyImage.spendingBlockHeight = 2700000;
+
+    const Bytes keyImageBytes = encodeKeyImageRecord(keyImage);
+    requireEqual("snapshot key-image bytes", Common::toHex(keyImageBytes), expectedKeyImageHex);
+    requireEqual("snapshot key-image sha256", hashToHex(sha256(keyImageBytes)), expectedKeyImageSha);
+    const KeyImageRecord parsedKeyImage = parseKeyImageRecord(keyImageBytes);
+    requireEqual("snapshot key-image round trip", Common::toHex(encodeKeyImageRecord(parsedKeyImage)), expectedKeyImageHex);
+
+    const std::string expectedConsensusHex =
+        "4447435730303031e03229000200f062796500000000d76379650000000002005381bd"
+        "e3c4510000ef872ce4c451000002006e000000000000007800000000000000010203"
+        "0405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+    const std::string expectedConsensusSha =
+        "16cd60bfd9e297ef809d14b82a6ce45e46d32a1bff931946b9e193925fceb742";
+
+    ConsensusWindowRecord consensus;
+    consensus.anchorHeight = 2700000;
+    consensus.timestamps = {1702454000, 1702454231};
+    consensus.cumulativeDifficulties = {89906076287315, 89906083563503};
+    consensus.blockSizes = {110, 120};
+    consensus.anchorRawBlockHash = podFromSequentialBytes<Crypto::Hash>(0x01);
+
+    const Bytes consensusBytes = encodeConsensusWindowRecord(consensus);
+    requireEqual("snapshot consensus bytes", Common::toHex(consensusBytes), expectedConsensusHex);
+    requireEqual("snapshot consensus sha256", hashToHex(sha256(consensusBytes)), expectedConsensusSha);
+    const ConsensusWindowRecord parsedConsensus = parseConsensusWindowRecord(consensusBytes);
+    requireEqual(
+        "snapshot consensus round trip",
+        Common::toHex(encodeConsensusWindowRecord(parsedConsensus)),
+        expectedConsensusHex);
+
+    const std::string expectedRoot =
+        "69e2b73e99a06f0ccf1c5a93756354befbd03f0c5a1af5dd6ad417b43fcdd3f0";
+    const std::string expectedManifestSha =
+        "c6adf5775b8867fb2c016af799aac0b9a2e6604a773300974c2e0715e3108383";
+    const std::string expectedManifestHex =
+        "4447534e41504d310100010007006d61696e6e6574202122232425262728292a2b2c"
+        "2d2e2f303132333435363738393a3b3c3d3e3fe0322900088438ac255023638252"
+        "a926c0ff4177a90224a90453d5764902d1f844e3394c55565758595a5b5c5d5e"
+        "5f606162636465666768696a6b6c6d6e6f7071727374d7637965000000000400ef"
+        "872ce4c4510000fe8d1299bb7f06004d09dd0100000000100030313233343536"
+        "373839616263646566030000000100000000000000010000000000000001000000"
+        "00000000030000000000000001000000005e000000000000006900000000000000"
+        "806ecad704f3df2f2248c54d109d5b23da9ce3ecbf2c938dd775b8ea98412b8f"
+        "fc0d24384c1c3e0af8333804e614f6009a5171a2c75bddb02b117983cb2cd2da"
+        "1d006368756e6b732f6f7574707574732d3030303030302e62696e2e7a737402"
+        "000000002c000000000000003700000000000000c01cada63061278450bd9772c8"
+        "a03a379c9400c1d41def1a5a8b2113b8ea6e10ba41478c9557eee279b4a2ba0d"
+        "f1e0e21e94881315a877706df43bb70ae3d14720006368756e6b732f6b65792d"
+        "696d616765732d3030303030302e62696e2e7a73740300000000620000000000"
+        "00006d0000000000000016cd60bfd9e297ef809d14b82a6ce45e46d32a1bff93"
+        "1946b9e193925fceb742bbf1c81a28da74d61131849b3bf9eba3caa31214a74c"
+        "b32b5282fdd14fd20e611f006368756e6b732f636f6e73656e7375732d303030"
+        "3030302e62696e2e7a737469e2b73e99a06f0ccf1c5a93756354befbd03f0c"
+        "5a1af5dd6ad417b43fcdd3f0";
+
+    Manifest manifest;
+    manifest.network = "mainnet";
+    manifest.genesisHash = podFromSequentialBytes<Crypto::Hash>(0x20);
+    manifest.anchorHeight = 2700000;
+    manifest.anchorHash = podFromHexOrExit<Crypto::Hash>(
+        "088438ac255023638252a926c0ff4177a90224a90453d5764902d1f844e3394c");
+    manifest.anchorPreviousHash = podFromSequentialBytes<Crypto::Hash>(0x55);
+    manifest.anchorTimestamp = 1702454231;
+    manifest.anchorMajorVersion = 4;
+    manifest.anchorMinorVersion = 0;
+    manifest.cumulativeDifficulty = 89906083563503;
+    manifest.alreadyGeneratedCoins = 1829293564005886;
+    manifest.alreadyGeneratedTransactions = 31263053;
+    manifest.sourceCommit = "0123456789abcdef";
+    manifest.sourceDbSchemaVersion = 3;
+    manifest.outputCount = 1;
+    manifest.keyImageCount = 1;
+    manifest.consensusRecordCount = 1;
+    manifest.chunks = {
+        {ChunkType::OutputRecords,
+         0,
+         outputBytes.size(),
+         outputBytes.size() + 11,
+         sha256(outputBytes),
+         podFromHexOrExit<Crypto::Hash>("fc0d24384c1c3e0af8333804e614f6009a5171a2c75bddb02b117983cb2cd2da"),
+         "chunks/outputs-000000.bin.zst"},
+        {ChunkType::KeyImageRecords,
+         0,
+         keyImageBytes.size(),
+         keyImageBytes.size() + 11,
+         sha256(keyImageBytes),
+         podFromHexOrExit<Crypto::Hash>("ba41478c9557eee279b4a2ba0df1e0e21e94881315a877706df43bb70ae3d147"),
+         "chunks/key-images-000000.bin.zst"},
+        {ChunkType::ConsensusWindowRecords,
+         0,
+         consensusBytes.size(),
+         consensusBytes.size() + 11,
+         sha256(consensusBytes),
+         podFromHexOrExit<Crypto::Hash>("bbf1c81a28da74d61131849b3bf9eba3caa31214a74cb32b5282fdd14fd20e61"),
+         "chunks/consensus-000000.bin.zst"}};
+
+    manifest.logicalStateRoot = logicalStateRoot(manifest, {output}, {keyImage}, {consensus});
+    requireEqual("snapshot logical root", hashToHex(manifest.logicalStateRoot), expectedRoot);
+    requireEqual("snapshot logical root repeat", hashToHex(logicalStateRoot(manifest, {output}, {keyImage}, {consensus})), expectedRoot);
+
+    const Bytes manifestBytes = encodeManifest(manifest);
+    requireEqual("snapshot manifest bytes", Common::toHex(manifestBytes), expectedManifestHex);
+    requireEqual("snapshot manifest sha256", hashToHex(sha256(manifestBytes)), expectedManifestSha);
+    const Manifest parsedManifest = parseManifest(manifestBytes);
+    requireEqual("snapshot manifest round trip", Common::toHex(encodeManifest(parsedManifest)), expectedManifestHex);
+
+    Bytes truncatedOutput = outputBytes;
+    truncatedOutput.pop_back();
+    requireThrows("snapshot truncated output", [&] { parseOutputRecord(truncatedOutput); });
+
+    Bytes unsupportedManifest = manifestBytes;
+    unsupportedManifest[8] = 2;
+    requireThrows("snapshot unsupported manifest version", [&] { parseManifest(unsupportedManifest); });
+
+    Limits strictLimits;
+    strictLimits.maxOutputs = 0;
+    requireThrows("snapshot manifest count limit", [&] { parseManifest(manifestBytes, strictLimits); });
+
+    auto duplicateChunks = manifest.chunks;
+    duplicateChunks[1].type = ChunkType::OutputRecords;
+    duplicateChunks[1].index = 0;
+    requireThrows("snapshot duplicate chunks", [&] { validateCanonicalChunks(duplicateChunks); });
+
+    auto pathTraversalChunks = manifest.chunks;
+    pathTraversalChunks[0].path = "../outputs.bin.zst";
+    requireThrows("snapshot path traversal", [&] { validateCanonicalChunks(pathTraversalChunks); });
+
+    auto unsortedOutputs = std::vector<OutputRecord> {output, output};
+    unsortedOutputs[0].globalIndex = 8;
+    unsortedOutputs[1].globalIndex = 7;
+    requireThrows("snapshot unsorted outputs", [&] { validateCanonicalOutputs(unsortedOutputs); });
+
+    auto duplicateKeyImages = std::vector<KeyImageRecord> {keyImage, keyImage};
+    requireThrows("snapshot duplicate key images", [&] { validateCanonicalKeyImages(duplicateKeyImages); });
+
+    auto duplicateConsensus = std::vector<ConsensusWindowRecord> {consensus, consensus};
+    requireThrows("snapshot duplicate consensus windows", [&] { validateCanonicalConsensusWindows(duplicateConsensus); });
+
+    std::cout << "Snapshot codec deterministic tests passed" << std::endl << std::endl;
+}
+
 int main(int argc, char **argv)
 {
     bool o_help = false, o_version = false, o_benchmark = false;
@@ -390,6 +613,9 @@ int main(int argc, char **argv)
         {
             TEST_HASH_FUNCTION_WITH_HEIGHT(cn_soft_shell_slow_hash_v2, CN_SOFT_SHELL_V2[height / 512], height);
         }
+
+        std::cout << std::endl;
+        runSnapshotCodecTests();
 
         if (o_benchmark)
         {
