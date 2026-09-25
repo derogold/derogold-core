@@ -52,13 +52,15 @@ namespace DaemonConfig
             std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c)
                            { return static_cast<char>(std::tolower(c)); });
 
-            if (mode == DaemonConfiguration::DAEMON_MODE_STANDARD || mode == DaemonConfiguration::DAEMON_MODE_EXPLORER)
+            if (mode == DaemonConfiguration::DAEMON_MODE_STANDARD ||
+                mode == DaemonConfiguration::DAEMON_MODE_EXPLORER ||
+                mode == DaemonConfiguration::DAEMON_MODE_EXPLORER_DETAILED)
             {
                 return mode;
             }
 
             throw std::runtime_error(
-                "Invalid daemon-mode: '" + rawMode + "'. Allowed values are 'standard' or 'explorer'.");
+                "Invalid daemon-mode: '" + rawMode + "'. Allowed values are 'standard', 'explorer', or 'explorer-detailed'.");
         }
     } // namespace
 
@@ -108,7 +110,7 @@ namespace DaemonConfig
             ("data-dir", "Specify the <path> to the Blockchain data directory", cxxopts::value<std::string>(config.dataDirectory), "<path>")
             ("dump-config", "Prints the current configuration to the screen", cxxopts::value<bool>(config.dumpConfig))
             ("daemon-mode", "Daemon RPC mode: standard or explorer",
-             cxxopts::value<std::string>(config.daemonMode), "<standard|explorer>")
+             cxxopts::value<std::string>(config.daemonMode), "<standard|explorer|explorer-detailed>")
             ("load-checkpoints", "Specify a file <path> containing a CSV of Blockchain checkpoints for faster sync. A value of 'default' uses the built-in checkpoints.", cxxopts::value<std::string>(config.checkPoints), "<path>")
             ("log-file", "Specify the <path> to the log file", cxxopts::value<std::string>(config.logFile), "<path>")
             ("log-level", "Specify log level", cxxopts::value<int>(config.logLevel))
@@ -340,7 +342,7 @@ namespace DaemonConfig
         }
         else if (j.HasMember("enable-blockexplorer-detailed") && j["enable-blockexplorer-detailed"].GetBool())
         {
-            config.daemonMode = DaemonConfiguration::DAEMON_MODE_EXPLORER;
+            config.daemonMode = DaemonConfiguration::DAEMON_MODE_EXPLORER_DETAILED;
         }
         else if (j.HasMember("enable-blockexplorer") && j["enable-blockexplorer"].GetBool())
         {

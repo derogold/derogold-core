@@ -24,6 +24,7 @@ namespace DaemonConfig
         static constexpr uint32_t DEFAULT_PRUNE_DEPTH = MIN_PRUNE_DEPTH;
         static constexpr const char *DAEMON_MODE_STANDARD = "standard";
         static constexpr const char *DAEMON_MODE_EXPLORER = "explorer";
+        static constexpr const char *DAEMON_MODE_EXPLORER_DETAILED = "explorer-detailed";
 
         bool help = false;
         bool version = false;
