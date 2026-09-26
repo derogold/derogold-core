@@ -562,6 +562,9 @@ int main(int argc, char *argv[])
                                 config.enableDbCompression,
                                 false);
 
+        dbConfig.lowMemoryMode = config.dbLite;
+        dbConfig.compactionRateLimitBytes = config.dbCompactionRateLimitMB * 1024 * 1024;
+
         if (!Tools::create_directories_if_necessary(dbConfig.dataDir))
         {
             throw std::runtime_error("Can't create directory: " + dbConfig.dataDir);

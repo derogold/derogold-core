@@ -12,6 +12,7 @@
 #include "logging/ILogger.h"
 
 #include <rapidjson/document.h>
+#include <set>
 #include <thread>
 
 namespace DaemonConfig
@@ -89,6 +90,30 @@ namespace DaemonConfig
         int dbThreads = static_cast<int>(std::thread::hardware_concurrency());
         uint64_t dbWriteBufferSizeMB = CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
         bool dbOptimize = false;
+
+        /* db-lite mode: low-resource presets for the database layer (smaller
+           write buffers and caches, fewer background threads, rate-limited
+           compaction). Only replaces the db-* defaults above when the
+           operator has not set the corresponding option explicitly. Named
+           db-lite because the plain "lite" option is the lite-node feature
+           (liteHeight below). */
+        bool dbLite = false;
+
+        /* Rate limit for background compaction/flush disk writes, MB/s.
+           0 leaves writes unlimited. db-lite mode presets this to
+           LITE_DB_COMPACTION_RATE_LIMIT_MB when not set explicitly. */
+        uint64_t dbCompactionRateLimitMB = 0;
+
+        /* Automatic background compaction scheduler. Off by default: the
+           full-database compaction it runs is heavy on CPU, memory and disk,
+           and operators on small machines wanted it under their explicit
+           control (compact_db start / --db-optimize still work manually). */
+        bool dbAutoCompaction = false;
+
+        /* Names of db-* options the operator provided explicitly (CLI or
+           config file). Not serialized; used to make explicit options win
+           over the db-lite presets. */
+        std::set<std::string> explicitlySetDbOptions;
 
         /* Opt-in. A node that prunes cannot serve historical blocks to peers,
            and nothing in the P2P handshake advertises that, so a requester just

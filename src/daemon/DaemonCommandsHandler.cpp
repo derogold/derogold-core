@@ -200,7 +200,15 @@ DaemonCommandsHandler::DaemonCommandsHandler(
 
     m_compactDbSchedulerCheckIntervalSeconds.store(AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS);
     m_stopCompactDbScheduler = false;
-    m_compactDbSchedulerThread = std::thread([this] { compact_db_scheduler_loop(); });
+
+    /* Opt-in: the automatic scheduler runs a full-database compaction,
+       which is heavy on CPU, memory and disk.  Operators on small machines
+       wanted it under explicit control; manual compaction via `compact_db`
+       or --db-optimize always remains available. */
+    if (m_config.dbAutoCompaction)
+    {
+        m_compactDbSchedulerThread = std::thread([this] { compact_db_scheduler_loop(); });
+    }
 }
 
 DaemonCommandsHandler::~DaemonCommandsHandler()
@@ -772,11 +780,20 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
         out() << InformationMsg("Last finish: ") << SuccessMsg(format_epoch(m_compactDbFinishedAtEpoch))
                   << InformationMsg(", height ") << SuccessMsg(std::to_string(m_compactDbFinishedAtHeight))
                   << std::endl;
-        out() << InformationMsg("Auto scheduler: ")
-                  << SuccessMsg(
-                         "enabled, interval "
-                         + std::to_string(m_compactDbSchedulerCheckIntervalSeconds.load()) + "s")
-                  << std::endl;
+        if (m_config.dbAutoCompaction)
+        {
+            out() << InformationMsg("Auto scheduler: ")
+                      << SuccessMsg(
+                             "enabled, interval "
+                             + std::to_string(m_compactDbSchedulerCheckIntervalSeconds.load()) + "s")
+                      << std::endl;
+        }
+        else
+        {
+            out() << InformationMsg("Auto scheduler: ") << SuccessMsg("disabled")
+                      << InformationMsg(" (start with --db-auto-compaction; manual: compact_db start)")
+                      << std::endl;
+        }
         return true;
     }
 

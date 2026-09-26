@@ -174,7 +174,10 @@ namespace DaemonConfig
             ("db-read-buffer-size", "Size of the database read cache in megabytes (MB) " + readCache, cxxopts::value<int>())
             ("db-threads", "Number of background threads used for compaction and flush operations (RocksDB only) (default: number of CPU cores, currently " + std::to_string(config.dbThreads) + ")", cxxopts::value<int>(config.dbThreads))
             ("db-write-buffer-size", "Size of the database write buffer in megabytes (MB) " + writeBuffer, cxxopts::value<int>())
-            ("db-optimize", "Optimize database and close", cxxopts::value<bool>(config.dbOptimize));
+            ("db-optimize", "Optimize database and close", cxxopts::value<bool>(config.dbOptimize))
+            ("db-lite", "Low-resource database mode: smaller write buffers and caches, fewer background threads and rate-limited compaction. Only overrides the db-* defaults you have not set explicitly", cxxopts::value<bool>(config.dbLite))
+            ("db-auto-compaction", "Run the automatic background DB compaction scheduler (off by default)", cxxopts::value<bool>(config.dbAutoCompaction))
+            ("db-compaction-rate-limit-mb", "Rate limit for background compaction/flush disk writes in megabytes per second (0 = unlimited)", cxxopts::value<uint64_t>(config.dbCompactionRateLimitMB));
 
         options.add_options("Syncing")
             ("transaction-validation-threads", "Number of threads to use to validate a transaction's inputs in parallel.", cxxopts::value<uint32_t>(config.transactionValidationThreads));
@@ -230,13 +233,37 @@ namespace DaemonConfig
                 exit(1);
             }
 
-            config.dbMaxOpenFiles = cli.count("db-max-open-files") > 0 ? cli["db-max-open-files"].as<int>()
-                                                                       : CryptoNote::ROCKSDB_MAX_OPEN_FILES;
-            config.dbReadCacheSizeMB = cli.count("db-read-buffer-size") > 0 ? cli["db-read-buffer-size"].as<int>()
-                                                                            : CryptoNote::ROCKSDB_READ_BUFFER_MB;
-            config.dbWriteBufferSizeMB = cli.count("db-write-buffer-size") > 0
-                                           ? cli["db-write-buffer-size"].as<int>()
-                                           : CryptoNote::ROCKSDB_WRITE_BUFFER_MB;
+            /* Only touch db-* fields the operator actually passed. The old
+               unconditional `: constant` fallbacks ran on the second
+               (post-config-file) CLI pass and silently clobbered values just
+               loaded from the config file. */
+            if (cli.count("db-max-open-files") > 0)
+            {
+                config.dbMaxOpenFiles = cli["db-max-open-files"].as<int>();
+                config.explicitlySetDbOptions.insert("db-max-open-files");
+            }
+
+            if (cli.count("db-read-buffer-size") > 0)
+            {
+                config.dbReadCacheSizeMB = cli["db-read-buffer-size"].as<int>();
+                config.explicitlySetDbOptions.insert("db-read-buffer-size");
+            }
+
+            if (cli.count("db-write-buffer-size") > 0)
+            {
+                config.dbWriteBufferSizeMB = cli["db-write-buffer-size"].as<int>();
+                config.explicitlySetDbOptions.insert("db-write-buffer-size");
+            }
+
+            if (cli.count("db-threads") > 0)
+            {
+                config.explicitlySetDbOptions.insert("db-threads");
+            }
+
+            if (cli.count("db-compaction-rate-limit-mb") > 0)
+            {
+                config.explicitlySetDbOptions.insert("db-compaction-rate-limit-mb");
+            }
 
             if (cli.count("daemon-mode") > 0)
             {
@@ -272,6 +299,38 @@ namespace DaemonConfig
                       << std::endl
                       << options.help() << std::endl;
             exit(1);
+        }
+
+        /* db-lite mode only replaces db-* defaults the operator has not set
+           explicitly (CLI or config file); explicit values always win. */
+        if (config.dbLite)
+        {
+            const auto &explicitSet = config.explicitlySetDbOptions;
+
+            if (explicitSet.find("db-max-open-files") == explicitSet.end())
+            {
+                config.dbMaxOpenFiles = CryptoNote::LITE_DB_MAX_OPEN_FILES;
+            }
+
+            if (explicitSet.find("db-read-buffer-size") == explicitSet.end())
+            {
+                config.dbReadCacheSizeMB = CryptoNote::LITE_DB_READ_CACHE_MB;
+            }
+
+            if (explicitSet.find("db-write-buffer-size") == explicitSet.end())
+            {
+                config.dbWriteBufferSizeMB = CryptoNote::LITE_DB_WRITE_BUFFER_MB;
+            }
+
+            if (explicitSet.find("db-threads") == explicitSet.end())
+            {
+                config.dbThreads = static_cast<int>(CryptoNote::LITE_DB_BACKGROUND_THREADS);
+            }
+
+            if (explicitSet.find("db-compaction-rate-limit-mb") == explicitSet.end())
+            {
+                config.dbCompactionRateLimitMB = CryptoNote::LITE_DB_COMPACTION_RATE_LIMIT_MB;
+            }
         }
     }
 
@@ -536,24 +595,44 @@ namespace DaemonConfig
             config.enableDbCompression = j["db-enable-compression"].GetBool();
         }
 
+        if (j.HasMember("db-write-buffer-size"))
+        {
+            config.dbWriteBufferSizeMB = j["db-write-buffer-size"].GetInt();
+            config.explicitlySetDbOptions.insert("db-write-buffer-size");
+        }
+
         if (j.HasMember("db-max-open-files"))
         {
             config.dbMaxOpenFiles = j["db-max-open-files"].GetInt();
+            config.explicitlySetDbOptions.insert("db-max-open-files");
         }
 
         if (j.HasMember("db-read-buffer-size"))
         {
             config.dbReadCacheSizeMB = j["db-read-buffer-size"].GetInt();
+            config.explicitlySetDbOptions.insert("db-read-buffer-size");
         }
 
         if (j.HasMember("db-threads"))
         {
             config.dbThreads = j["db-threads"].GetInt();
+            config.explicitlySetDbOptions.insert("db-threads");
         }
 
-        if (j.HasMember("db-write-buffer-size"))
+        if (j.HasMember("db-lite"))
         {
-            config.dbWriteBufferSizeMB = j["db-write-buffer-size"].GetInt();
+            config.dbLite = j["db-lite"].GetBool();
+        }
+
+        if (j.HasMember("db-auto-compaction"))
+        {
+            config.dbAutoCompaction = j["db-auto-compaction"].GetBool();
+        }
+
+        if (j.HasMember("db-compaction-rate-limit-mb"))
+        {
+            config.dbCompactionRateLimitMB = j["db-compaction-rate-limit-mb"].GetUint64();
+            config.explicitlySetDbOptions.insert("db-compaction-rate-limit-mb");
         }
 
         if (j.HasMember("prune"))
@@ -676,6 +755,9 @@ namespace DaemonConfig
         j.AddMember("db-read-buffer-size", config.dbReadCacheSizeMB, alloc);
         j.AddMember("db-threads", config.dbThreads, alloc);
         j.AddMember("db-write-buffer-size", config.dbWriteBufferSizeMB, alloc);
+        j.AddMember("db-lite", config.dbLite, alloc);
+        j.AddMember("db-auto-compaction", config.dbAutoCompaction, alloc);
+        j.AddMember("db-compaction-rate-limit-mb", config.dbCompactionRateLimitMB, alloc);
         j.AddMember("prune", config.prune, alloc);
         j.AddMember("background-prune", config.backgroundPrune, alloc);
         j.AddMember("prune-depth", config.pruneDepth, alloc);

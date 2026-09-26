@@ -7,11 +7,11 @@
 
 #include "RocksDBWrapper.h"
 
-#include "DBUtils.h"
 #include "DataBaseErrors.h"
 #include "common/ScopeExit.h"
 
 #include <rocksdb/filter_policy.h>
+#include <rocksdb/rate_limiter.h>
 #include <rocksdb/statistics.h>
 #include <rocksdb/table.h>
 #include <rocksdb/utilities/options_util.h>
@@ -279,6 +279,13 @@ namespace CryptoNote
         rocksdb::CompactRangeOptions compactRangeOptions;
         compactRangeOptions.exclusive_manual_compaction = true;
         compactRangeOptions.change_level = true;
+        /* Belt-and-braces alongside DisableManualCompaction(): CompactRange
+           polls this flag between output writes and while picking queued
+           manual compactions, so it returns promptly once a cancel lands.
+           The flag is reset at the top of every optimize() call, and these
+           options are per-call, so a stale-true flag cannot leak into the
+           next run. */
+        compactRangeOptions.canceled = &optimizeCancelRequested;
 
         logger(Logging::INFO) << "Preparing to optimize DB for reading... This may take a long time.";
         logger(Logging::INFO) << "Please do not close the program abruptly to prevent DB corruption.";
@@ -342,7 +349,11 @@ namespace CryptoNote
 
         if (optimizeCancelRequested.load())
         {
-            throw std::runtime_error("DB compaction was cancelled");
+            // A cancel is a clean stop, not a failure: the DB stays fully
+            // usable (CompactRange is atomic per file) and the daemon's
+            // console shows a stopped run rather than a failed one.
+            logger(Logging::WARNING) << "DB compaction was cancelled; database remains usable.";
+            return;
         }
 
         if (!compactStatus.ok())
@@ -389,14 +400,24 @@ namespace CryptoNote
         dbOptions.skip_stats_update_on_db_open = true;
         dbOptions.compaction_readahead_size = 2 * 1024 * 1024;
 
+        // db-lite mode: smooth background flush/compaction disk writes so a
+        // full-database compaction cannot saturate the disk and stutter the
+        // whole machine. 0 leaves writes unlimited.
+        if (config.compactionRateLimitBytes > 0)
+        {
+            dbOptions.rate_limiter.reset(rocksdb::NewGenericRateLimiter(config.compactionRateLimitBytes));
+        }
+
         rocksdb::ColumnFamilyOptions cfOptions;
 
         // Set size of a single memtable.
         cfOptions.write_buffer_size = static_cast<size_t>(config.writeBufferSize);
         // merge two memtables when flushing to L0
         cfOptions.min_write_buffer_number_to_merge = 2;
-        // Reduce write stalls by allowing more immutable memtables.
-        cfOptions.max_write_buffer_number = 6;
+        // Reduce write stalls by allowing more immutable memtables.  db-lite
+        // mode trades some write-stall headroom for a bounded memtable
+        // budget (smaller buffers * fewer of them).
+        cfOptions.max_write_buffer_number = config.lowMemoryMode ? 3 : 6;
         // Keep L0 file count low so compaction jobs stay small (fewer
         // simultaneous open FDs per compaction job).  A trigger of 4 is the
         // RocksDB default; the previous value of 20 let hundreds of L0 files
@@ -433,53 +454,21 @@ namespace CryptoNote
         bbtOptions.block_cache = rocksdb::NewLRUCache(config.readCacheSize);
         bbtOptions.block_size = 32 * 1024;
 
+        // db-lite mode: charge index and filter blocks against the block
+        // cache instead of keeping them pinned outside it for every open SST
+        // file.  Without this, per-file metadata grows without bound as the
+        // table cache opens files (up to max_open_files of them) and is the
+        // main source of unbounded background memory growth.
+        if (config.lowMemoryMode)
+        {
+            bbtOptions.cache_index_and_filter_blocks = true;
+            bbtOptions.pin_l0_filter_and_index_blocks_in_cache = true;
+        }
+
         cfOptions.table_factory.reset(NewBlockBasedTableFactory(bbtOptions));
         cfOptions.memtable_prefix_bloom_size_ratio = 0.02;
         cfOptions.memtable_whole_key_filtering = true;
 
         return rocksdb::Options {dbOptions, cfOptions};
-    }
-
-    void RocksDBWrapper::getDBOptions(const DataBaseConfig &config,
-                                      rocksdb::DBOptions &dbOptions,
-                                      std::vector<rocksdb::ColumnFamilyDescriptor> &columnFamilies)
-    {
-        dbOptions.create_if_missing = true;
-        dbOptions.create_missing_column_families = true;
-        dbOptions.info_log_level = rocksdb::InfoLogLevel::INFO_LEVEL;
-        dbOptions.keep_log_file_num = 1;
-        dbOptions.IncreaseParallelism(static_cast<int>(config.backgroundThreadsCount));
-        dbOptions.max_open_files = static_cast<int>(config.maxOpenFiles);
-        dbOptions.skip_stats_update_on_db_open = true;
-        dbOptions.compaction_readahead_size = 2 * 1024 * 1024;
-
-        rocksdb::ColumnFamilyOptions cfOptions;
-        cfOptions.OptimizeLevelStyleCompaction();
-        cfOptions.compression_per_level.resize(cfOptions.num_levels);
-        const auto compressionLevel = config.compressionEnabled ? rocksdb::kZSTD : rocksdb::kNoCompression;
-
-        for (int i = 0; i < cfOptions.num_levels; ++i)
-        {
-            cfOptions.compression_per_level[i] = i < 2 ? rocksdb::kNoCompression : compressionLevel;
-        }
-        cfOptions.bottommost_compression = compressionLevel;
-
-        rocksdb::BlockBasedTableOptions bbtOptions;
-        bbtOptions.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
-        bbtOptions.data_block_hash_table_util_ratio = 0.75;
-        bbtOptions.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
-        bbtOptions.block_size = 32 * 1024;
-
-        cfOptions.table_factory.reset(NewBlockBasedTableFactory(bbtOptions));
-        cfOptions.memtable_prefix_bloom_size_ratio = 0.02;
-        cfOptions.memtable_whole_key_filtering = true;
-
-        columnFamilies.emplace_back("RawBlocks", cfOptions);
-        columnFamilies.emplace_back("SpentKeyImages", cfOptions);
-        columnFamilies.emplace_back("CachedTransactions", cfOptions);
-        columnFamilies.emplace_back("PaymentIds", cfOptions);
-        columnFamilies.emplace_back("CachedBlocks", cfOptions);
-        columnFamilies.emplace_back("KeyOutputGlobalIndexes", cfOptions);
-        columnFamilies.emplace_back("Others", cfOptions);
     }
 } // namespace CryptoNote
