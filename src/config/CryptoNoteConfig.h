@@ -400,6 +400,15 @@ namespace CryptoNote
     const uint64_t ROCKSDB_MAX_OPEN_FILES = 4096; // 4096 files
     const uint64_t ROCKSDB_BACKGROUND_THREADS = 8; // 4 DB threads
 
+    /* Low-resource presets applied by the daemon's `lite` mode. Lite mode
+       only replaces these defaults when the operator has not set the
+       corresponding db-* option explicitly. */
+    const uint64_t LITE_DB_WRITE_BUFFER_MB = 32; // 32 MB
+    const uint64_t LITE_DB_READ_CACHE_MB = 128; // 128 MB
+    const uint64_t LITE_DB_MAX_OPEN_FILES = 512; // 512 files
+    const uint64_t LITE_DB_BACKGROUND_THREADS = 2; // 2 threads
+    const uint64_t LITE_DB_COMPACTION_RATE_LIMIT_MB = 128; // 128 MB/s
+
     const uint64_t LEVELDB_WRITE_BUFFER_MB = 4; // 4 MB
     const uint64_t LEVELDB_READ_BUFFER_MB = 128; // 128 MB
     const uint64_t LEVELDB_MAX_OPEN_FILES = 512; // 512 files
