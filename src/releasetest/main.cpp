@@ -111,12 +111,36 @@ namespace
 
     void testCompetingChainPolicy()
     {
-        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(100, 100),
-              "equal-work branch preserves first-seen consensus");
-        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(101, 100),
+        const auto lowerHash = hashWithFirstByte(0x10);
+        const auto higherHash = hashWithFirstByte(0x20);
+        const uint32_t activationHeight = CryptoNote::parameters::DETERMINISTIC_FORK_CHOICE_HEIGHT;
+
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  100, 100, activationHeight - 1, higherHash, lowerHash),
+              "equal-work branch preserves first-seen consensus before activation");
+        check(CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  100, 100, activationHeight, higherHash, lowerHash),
+              "lower first-divergent hash wins equal work at activation");
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  100, 100, activationHeight, lowerHash, higherHash),
+              "higher first-divergent hash loses equal work at activation");
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  100, 100, activationHeight, lowerHash, lowerHash),
+              "identical first-divergent hashes do not trigger a switch");
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  101, 100, activationHeight, higherHash, lowerHash),
               "lower-work branch cannot replace main chain");
-        check(CryptoNote::ForkChoice::shouldSwitchToCandidate(100, 101),
+        check(CryptoNote::ForkChoice::shouldSwitchToCandidate(
+                  100, 101, activationHeight, lowerHash, higherHash),
               "strictly greater cumulative work replaces main chain");
+        check(CryptoNote::parameters::SOFTWARE_SUPPORTED_FORK_INDEX
+                  == CryptoNote::parameters::DETERMINISTIC_FORK_CHOICE_FORK_INDEX,
+              "software advertises support through fork index 11");
+        check(CryptoNote::parameters::FORK_HEIGHTS[CryptoNote::parameters::DETERMINISTIC_FORK_CHOICE_FORK_INDEX]
+                  == 3000000,
+              "deterministic fork choice activates at block 3000000");
+        check(CryptoNote::P2P_CURRENT_VERSION == 11 && CryptoNote::P2P_MINIMUM_VERSION == 11,
+              "P2P protocol 11 excludes older daemon releases");
 
         using CryptoNote::error::AddBlockErrorCode;
         check(CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ADDED_TO_MAIN),

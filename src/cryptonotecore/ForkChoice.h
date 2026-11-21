@@ -4,16 +4,37 @@
 
 #pragma once
 
+#include "config/CryptoNoteConfig.h"
+#include "crypto/hash.h"
+
 #include <cstdint>
+#include <cstring>
 
 namespace CryptoNote::ForkChoice
 {
-    /* Preserve DeroGold's existing consensus rule: a candidate chain replaces
-       the current main chain only when it carries strictly more cumulative
-       difficulty. Equal-work branches remain first-seen until a future,
-       explicitly activated deterministic tie-break is agreed. */
-    inline bool shouldSwitchToCandidate(const uint64_t mainWork, const uint64_t candidateWork)
+    inline int compareHashes(const Crypto::Hash &left, const Crypto::Hash &right)
     {
-        return candidateWork > mainWork;
+        return std::memcmp(&left, &right, sizeof(Crypto::Hash));
+    }
+
+    /* At fork 11, equal-work branches converge on the branch whose first
+       block after the common ancestor has the lexicographically lower hash.
+       Comparing the first divergent block keeps the preference stable as both
+       branches grow and avoids tip-hash reorg ping-pong. Historical forks keep
+       the original strict-greater-work, first-seen rule. */
+    inline bool shouldSwitchToCandidate(
+        const uint64_t mainWork,
+        const uint64_t candidateWork,
+        const uint32_t forkHeight,
+        const Crypto::Hash &mainFirstDivergentHash,
+        const Crypto::Hash &candidateFirstDivergentHash)
+    {
+        if (candidateWork != mainWork)
+        {
+            return candidateWork > mainWork;
+        }
+
+        return forkHeight >= parameters::DETERMINISTIC_FORK_CHOICE_HEIGHT
+            && compareHashes(candidateFirstDivergentHash, mainFirstDivergentHash) < 0;
     }
 } // namespace CryptoNote::ForkChoice

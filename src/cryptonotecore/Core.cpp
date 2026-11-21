@@ -1669,20 +1669,6 @@ namespace CryptoNote
             return false;
         }
 
-        const uint64_t mainWork = currentMain->getCurrentCumulativeDifficulty();
-        const uint64_t candidateWork = candidate->getCurrentCumulativeDifficulty();
-
-        if (!ForkChoice::shouldSwitchToCandidate(mainWork, candidateWork))
-        {
-            logger(Logging::DEBUGGING)
-                << "Fork candidate retained as alternative: block " << blockDescription
-                << ", main tip " << currentMain->getTopBlockIndex() << " (" << currentMain->getTopBlockHash()
-                << "), main cumulative difficulty " << mainWork << ", candidate tip "
-                << candidate->getTopBlockIndex() << " (" << candidate->getTopBlockHash()
-                << "), candidate cumulative difficulty " << candidateWork;
-            return false;
-        }
-
         std::unordered_set<IBlockchainCache *> mainPath;
         for (IBlockchainCache *segment = currentMain; segment != nullptr; segment = segment->getParent())
         {
@@ -1696,6 +1682,29 @@ namespace CryptoNote
         }
 
         const uint32_t forkHeight = commonSegment == nullptr ? 0 : commonSegment->getTopBlockIndex() + 1;
+        const Crypto::Hash mainFirstDivergentHash = currentMain->getBlockHash(forkHeight);
+        const Crypto::Hash candidateFirstDivergentHash = candidate->getBlockHash(forkHeight);
+        const uint64_t mainWork = currentMain->getCurrentCumulativeDifficulty();
+        const uint64_t candidateWork = candidate->getCurrentCumulativeDifficulty();
+
+        if (!ForkChoice::shouldSwitchToCandidate(
+                mainWork,
+                candidateWork,
+                forkHeight,
+                mainFirstDivergentHash,
+                candidateFirstDivergentHash))
+        {
+            logger(Logging::DEBUGGING)
+                << "Fork candidate retained as alternative: block " << blockDescription
+                << ", fork height " << forkHeight << ", main first divergent hash " << mainFirstDivergentHash
+                << ", candidate first divergent hash " << candidateFirstDivergentHash
+                << ", main tip " << currentMain->getTopBlockIndex() << " (" << currentMain->getTopBlockHash()
+                << "), main cumulative difficulty " << mainWork << ", candidate tip "
+                << candidate->getTopBlockIndex() << " (" << candidate->getTopBlockHash()
+                << "), candidate cumulative difficulty " << candidateWork;
+            return false;
+        }
+
         const uint32_t oldTipHeight = currentMain->getTopBlockIndex();
         const Crypto::Hash oldTipHash = currentMain->getTopBlockHash();
         const uint32_t newTipHeight = candidate->getTopBlockIndex();
@@ -1717,7 +1726,11 @@ namespace CryptoNote
             << "Chain switch: fork height " << forkHeight << ", old tip " << oldTipHeight << " (" << oldTipHash
             << "), old cumulative difficulty " << mainWork << ", new tip " << newTipHeight << " (" << newTipHash
             << "), new cumulative difficulty " << candidateWork << ", work advantage "
-            << (candidateWork - mainWork) << ", trigger block " << blockDescription;
+            << (candidateWork - mainWork) << ", selection reason "
+            << (candidateWork > mainWork ? "greater cumulative difficulty" : "lower first-divergent block hash")
+            << ", main first divergent hash " << mainFirstDivergentHash
+            << ", candidate first divergent hash " << candidateFirstDivergentHash
+            << ", trigger block " << blockDescription;
 
         return true;
     }

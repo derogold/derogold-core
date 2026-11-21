@@ -218,6 +218,9 @@ namespace CryptoNote
         const uint32_t UPGRADE_HEIGHT_V6 = 2325000; // Upgrade height for DIFFICULTY_TARGET_V3
         const uint32_t UPGRADE_HEIGHT_V7 = 2420000; // Upgrade height for CN-UPX switch
 
+        const uint8_t DETERMINISTIC_FORK_CHOICE_FORK_INDEX = 11;
+        const uint32_t DETERMINISTIC_FORK_CHOICE_HEIGHT = 3000000;
+
         const uint32_t UPGRADE_HEIGHT_CURRENT = UPGRADE_HEIGHT_V7;
 
         const unsigned UPGRADE_VOTING_THRESHOLD = 90; // percent
@@ -227,7 +230,7 @@ namespace CryptoNote
         static_assert(UPGRADE_VOTING_WINDOW > 1, "Bad UPGRADE_VOTING_WINDOW");
 
         /* Block heights we are going to have hard forks at */
-        const uint64_t FORK_HEIGHTS[] = {
+        constexpr uint64_t FORK_HEIGHTS[] = {
             700000, // 0
             1470000, // 1
             1980000, // 2
@@ -239,7 +242,7 @@ namespace CryptoNote
             2480000, // 8
             2500000, // 9
             2517000, // 10
-            3000000, // 11
+            DETERMINISTIC_FORK_CHOICE_HEIGHT, // 11
             3500000, // 12
             4000000, // 13
             4500000, // 14
@@ -249,9 +252,13 @@ namespace CryptoNote
         };
 
         /* MAKE SURE TO UPDATE THIS VALUE WITH EVERY MAJOR RELEASE BEFORE A FORK */
-        const uint64_t SOFTWARE_SUPPORTED_FORK_INDEX = 10;
+        const uint64_t SOFTWARE_SUPPORTED_FORK_INDEX = DETERMINISTIC_FORK_CHOICE_FORK_INDEX;
 
         const uint64_t FORK_HEIGHTS_SIZE = sizeof(FORK_HEIGHTS) / sizeof(*FORK_HEIGHTS);
+
+        static_assert(
+            FORK_HEIGHTS[DETERMINISTIC_FORK_CHOICE_FORK_INDEX] == DETERMINISTIC_FORK_CHOICE_HEIGHT,
+            "Deterministic fork-choice index and activation height disagree");
 
         /* The index in the FORK_HEIGHTS array that this version of the software will
            support. For example, if CURRENT_FORK_INDEX is 3, this version of the
@@ -337,9 +344,9 @@ namespace CryptoNote
 
     // P2P Network Configuration Section - This defines our current P2P network version
     // and the minimum version for communication between nodes
-    const uint8_t P2P_CURRENT_VERSION = 10;
+    const uint8_t P2P_CURRENT_VERSION = 11;
 
-    const uint8_t P2P_MINIMUM_VERSION = 9;
+    const uint8_t P2P_MINIMUM_VERSION = 11;
 
     // This defines the minimum P2P version required for lite blocks propogation
     const uint8_t P2P_LITE_BLOCKS_PROPOGATION_VERSION = 0;
