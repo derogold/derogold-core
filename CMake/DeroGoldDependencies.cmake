@@ -77,7 +77,9 @@ function(derogold_add_cryptopp)
     # supplies this through a pragma, but MinGW ignores that directive and
     # needs bcrypt on the target's transitive link interface.
     if(WIN32)
-        target_link_libraries(cryptopp-static PUBLIC bcrypt)
+        # Crypto++'s own CMake file uses the plain signature for this target,
+        # so this call must use the same signature.
+        target_link_libraries(cryptopp-static bcrypt)
     endif()
 
     # DeroGold includes <cryptopp/sha.h>, so the headers have to be reachable
