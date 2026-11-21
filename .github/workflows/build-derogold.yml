@@ -79,15 +79,36 @@ jobs:
             build_preset: linux-x64-gcc-package
             run_tests: true
 
+          - os: ubuntu-22.04
+            arch: arm64
+            compiler: gcc
+            install: >-
+              cmake
+              crossbuild-essential-arm64
+              git
+              ninja-build
+              pkg-config
+            configure_preset: linux-arm64-gcc-cross-package
+            build_preset: linux-arm64-gcc-cross-package
+            run_tests: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Install Program / Dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.arch != 'arm64'
         run: |
           sudo apt-get update
           sudo apt-get install ${{ matrix.install }} -y
+
+      - name: Install ARM64 Cross Dependencies
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.install }} libssl-dev:arm64
 
       - name: Install CMake
         uses: lukka/get-cmake@latest
