@@ -124,6 +124,8 @@ namespace DaemonConfig
             ("rpc-ipc-group", "Group to own the RPC socket file, so members of that group may connect", cxxopts::value<std::string>(config.rpcIpcGroup), "<group>");
 
         options.add_options("Mining")
+            ("enable-mining", "Enable mining RPC methods. Cannot be combined with --sync-from-height",
+             cxxopts::value<bool>(config.enableMining)->default_value(config.enableMining ? "true" : "false"))
             ("stratum-bind-ip", "Interface the built-in stratum server listens on. Loopback by default: the port has no authentication, so anyone who can reach it can mine to their own address using this node", cxxopts::value<std::string>(config.stratumBindIp), "<ip>")
             ("stratum-bind-port", "Port for the built-in stratum server, so a miner can mine straight to this node. 0 disables it", cxxopts::value<uint16_t>(config.stratumBindPort), "#")
             ("stratum-share-difficulty", "Difficulty stratum miners are given. 0 uses the network difficulty, so a miner only reports when it has found a block; a lower value makes it report progress as well", cxxopts::value<uint64_t>(config.stratumShareDifficulty), "#")
@@ -348,6 +350,11 @@ namespace DaemonConfig
         }
 
         // Mining Options
+
+        if (j.HasMember("enable-mining"))
+        {
+            config.enableMining = j["enable-mining"].GetBool();
+        }
 
         if (j.HasMember("stratum-bind-ip"))
         {
@@ -613,6 +620,7 @@ namespace DaemonConfig
         j.AddMember("in-peers", config.inPeers, alloc);
 
         j.AddMember("stratum-bind-ip", config.stratumBindIp, alloc);
+        j.AddMember("enable-mining", config.enableMining, alloc);
         j.AddMember("stratum-bind-port", config.stratumBindPort, alloc);
         j.AddMember("stratum-share-difficulty", config.stratumShareDifficulty, alloc);
         j.AddMember("stratum-max-connections", static_cast<uint64_t>(config.stratumMaxConnections), alloc);

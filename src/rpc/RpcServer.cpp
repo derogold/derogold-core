@@ -53,6 +53,7 @@ RpcServer::RpcServer(
     const std::string corsHeader,
     const std::string feeAddress,
     const uint64_t feeAmount,
+    const bool miningEnabled,
     const RpcMode rpcMode,
     const std::shared_ptr<CryptoNote::Core> core,
     const std::shared_ptr<CryptoNote::NodeServer> p2p,
@@ -65,6 +66,7 @@ RpcServer::RpcServer(
     m_corsHeader(corsHeader),
     m_feeAddress(feeAddress),
     m_feeAmount(feeAmount),
+    m_miningEnabled(miningEnabled),
     m_rpcMode(rpcMode),
     m_core(core),
     m_p2p(p2p),
@@ -1649,6 +1651,16 @@ std::tuple<Error, uint16_t> RpcServer::getBlockTemplateJsonRpc(
     httplib::Response &res,
     const rapidjson::Document &body)
 {
+    if (!m_miningEnabled || m_core->getSyncFloorHeight() > 0)
+    {
+        failJsonRpcRequest(
+            -10,
+            "Mining is disabled. Nodes bootstrapped with --sync-from-height cannot serve mining work safely.",
+            res
+        );
+        return {SUCCESS, 200};
+    }
+
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
 
@@ -1778,6 +1790,16 @@ std::tuple<Error, uint16_t> RpcServer::submitBlockJsonRpc(
     httplib::Response &res,
     const rapidjson::Document &body)
 {
+    if (!m_miningEnabled || m_core->getSyncFloorHeight() > 0)
+    {
+        failJsonRpcRequest(
+            -10,
+            "Mining is disabled. Nodes bootstrapped with --sync-from-height cannot accept mined blocks safely.",
+            res
+        );
+        return {SUCCESS, 200};
+    }
+
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
 

@@ -330,6 +330,25 @@ int main(int argc, char *argv[])
     // Load in the CLI specified parameters again to overwrite anything from the config file
     handleSettings(argc, argv, config);
 
+    if (config.syncFromHeight > 0 && config.enableMining)
+    {
+        std::cout << getProjectCLIHeader()
+                  << "Error: --sync-from-height cannot be combined with --enable-mining. "
+                     "A bootstrap node does not have the historical output data required for safe mining. "
+                     "Set --enable-mining=false."
+                  << std::endl;
+        return 1;
+    }
+
+    if (config.syncFromHeight > 0 && config.stratumBindPort != 0)
+    {
+        std::cout << getProjectCLIHeader()
+                  << "Error: --sync-from-height cannot be combined with --stratum-bind-port. "
+                     "Disable the built-in stratum server by setting --stratum-bind-port=0."
+                  << std::endl;
+        return 1;
+    }
+
 #if !defined(WIN32)
     /* Raise the open-file-descriptor limit as high as the hard limit allows.
      * RocksDB compaction opens SST files outside the table-cache, so the OS
@@ -874,6 +893,7 @@ int main(int argc, char *argv[])
                             config.enableCors,
                             config.feeAddress,
                             config.feeAmount,
+                            config.enableMining,
                             rpcMode,
                             ccore,
                             p2psrv,

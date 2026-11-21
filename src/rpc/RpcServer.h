@@ -39,6 +39,7 @@ class RpcServer
         std::string corsHeader,
         std::string feeAddress,
         uint64_t feeAmount,
+        bool miningEnabled,
         RpcMode rpcMode,
         std::shared_ptr<CryptoNote::Core> core,
         std::shared_ptr<CryptoNote::NodeServer> p2p,
@@ -288,6 +289,9 @@ class RpcServer
 
     /* The amount to return from the /fee endpoint */
     const uint64_t m_feeAmount;
+
+    /* Whether block-template and block-submission RPC methods are available. */
+    const bool m_miningEnabled;
 
     /* RPC methods that are enabled */
     const RpcMode m_rpcMode;
