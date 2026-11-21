@@ -76,8 +76,6 @@ namespace CryptoNote
     private:
         static rocksdb::Options getDBOptions(const DataBaseConfig &config);
 
-        static void getDBOptions(const DataBaseConfig &config, rocksdb::DBOptions &dbOptions, std::vector<rocksdb::ColumnFamilyDescriptor> &columnFamilies);
-
         static std::string getDataDir(const DataBaseConfig &config)
         {
             return config.dataDir + '/' + DB_NAME;
