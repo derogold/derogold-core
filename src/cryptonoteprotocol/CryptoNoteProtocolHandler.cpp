@@ -11,6 +11,7 @@
 #include "cryptonotecore/CryptoNoteBasicImpl.h"
 #include "cryptonotecore/CryptoNoteFormatUtils.h"
 #include "cryptonotecore/Currency.h"
+#include "cryptonoteprotocol/BlockRelayPolicy.h"
 #include "p2p/LevinProtocol.h"
 
 #include <chrono>
@@ -628,24 +629,19 @@ namespace CryptoNote
         auto result = m_core.addBlock(RawBlock {arg.block.blockTemplate, arg.block.transactions});
         if (result == error::AddBlockErrorCondition::BLOCK_ADDED)
         {
+            if (BlockRelayPolicy::shouldRelay(result))
+            {
+                ++arg.hop;
+                relayBlock(arg);
+            }
+
             if (result == error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED)
             {
-                ++arg.hop;
-                // TODO: Add here announce protocol usage
-                relayBlock(arg);
-                // relay_block(arg, context);
                 requestMissingPoolTransactions(context);
-            }
-            else if (result == error::AddBlockErrorCode::ADDED_TO_MAIN)
-            {
-                ++arg.hop;
-                // TODO: Add here announce protocol usage
-                relayBlock(arg);
-                // relay_block(arg, context);
             }
             else if (result == error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE)
             {
-                logger(Logging::TRACE) << context << "Block added as alternative";
+                logger(Logging::TRACE) << context << "Validated alternative block relayed";
             }
             else
             {
@@ -1157,24 +1153,19 @@ namespace CryptoNote
             auto result = m_core.addBlock(RawBlock {arg.blockTemplate, have_txs});
             if (result == error::AddBlockErrorCondition::BLOCK_ADDED)
             {
+                if (BlockRelayPolicy::shouldRelay(result))
+                {
+                    ++arg.hop;
+                    relay_post_notify<NOTIFY_NEW_LITE_BLOCK>(*m_p2p, arg, &context.m_connection_id);
+                }
+
                 if (result == error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED)
                 {
-                    ++arg.hop;
-                    // TODO: Add here announce protocol usage
-                    relay_post_notify<NOTIFY_NEW_LITE_BLOCK>(*m_p2p, arg, &context.m_connection_id);
-                    // relay_block(arg, context);
                     requestMissingPoolTransactions(context);
-                }
-                else if (result == error::AddBlockErrorCode::ADDED_TO_MAIN)
-                {
-                    ++arg.hop;
-                    // TODO: Add here announce protocol usage
-                    relay_post_notify<NOTIFY_NEW_LITE_BLOCK>(*m_p2p, arg, &context.m_connection_id);
-                    // relay_block(arg, context);
                 }
                 else if (result == error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE)
                 {
-                    logger(Logging::TRACE) << context << "Block added as alternative";
+                    logger(Logging::TRACE) << context << "Validated alternative lite block relayed";
                 }
                 else
                 {

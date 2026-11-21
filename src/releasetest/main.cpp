@@ -5,7 +5,9 @@
 
 #include "config/CryptoNoteConfig.h"
 #include "cryptonotecore/Currency.h"
+#include "cryptonotecore/ForkChoice.h"
 #include "cryptonotecore/TransactionPoolPolicy.h"
+#include "cryptonoteprotocol/BlockRelayPolicy.h"
 #include "logging/ConsoleLogger.h"
 #include "zedwallet++/SweepMath.h"
 
@@ -107,6 +109,28 @@ namespace
               "fee-window interpretation does not leak past exit height");
     }
 
+    void testCompetingChainPolicy()
+    {
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(100, 100),
+              "equal-work branch preserves first-seen consensus");
+        check(!CryptoNote::ForkChoice::shouldSwitchToCandidate(101, 100),
+              "lower-work branch cannot replace main chain");
+        check(CryptoNote::ForkChoice::shouldSwitchToCandidate(100, 101),
+              "strictly greater cumulative work replaces main chain");
+
+        using CryptoNote::error::AddBlockErrorCode;
+        check(CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ADDED_TO_MAIN),
+              "new main-chain block is relayed");
+        check(CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ADDED_TO_ALTERNATIVE),
+              "new validated alternative block is relayed");
+        check(CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED),
+              "chain-switching block is relayed");
+        check(!CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ALREADY_EXISTS),
+              "known block is not relayed again");
+        check(!CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::REJECTED_AS_ORPHANED),
+              "unvalidated orphan is not relayed");
+    }
+
     void testConfiguredPowMap()
     {
         using namespace CryptoNote::parameters;
@@ -143,6 +167,7 @@ int main()
     testSweepMath();
     testTransactionPoolPolicy();
     testHistoricalFusionBoundaries();
+    testCompetingChainPolicy();
     testConfiguredPowMap();
 
     if (failures != 0)
