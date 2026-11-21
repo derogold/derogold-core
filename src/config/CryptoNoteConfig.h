@@ -211,14 +211,6 @@ namespace CryptoNote
 
         const uint64_t FUSION_FEE_V1 = 1000000;
 
-        /* This sets the maximum number of fusion transactions that can be present in the pool
-            at any given time. Incoming fusion transactions that attempt to exceed this limit
-            will be rejected from the pool and will not be added. This mechanism is in place
-            to help curtail fusion transaction spam. */
-        const size_t FUSION_TX_MAX_POOL_COUNT = 130;
-
-        const size_t TX_MAX_POOL_COUNT = 260;
-
         const uint32_t UPGRADE_HEIGHT_V2 = 1;
         const uint32_t UPGRADE_HEIGHT_V3 = 2;
         const uint32_t UPGRADE_HEIGHT_V4 = 3; // Upgrade height for CN-Lite Variant 1 switch.

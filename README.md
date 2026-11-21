@@ -288,9 +288,8 @@ Pass the socket path where a daemon address goes. An absolute path or an
 either, so a hostname is never mistaken for a path.
 
 ```bash
-./zedwallet++ --remote-daemon /run/derogold/daemon.sock
-./WalletService --daemon-address /run/derogold/daemon.sock
-./WalletApi --rpc-password <password> --daemon-address /run/derogold/daemon.sock
+./degwallet --remote-daemon /run/derogold/daemon.sock
+./wallet-api --rpc-password <password> --daemon-address /run/derogold/daemon.sock
 ./miner --daemon-address /run/derogold/daemon.sock --address <address>
 ```
 
