@@ -54,6 +54,15 @@ namespace CryptoNote
 
         bool compressionEnabled;
 
+        /* db-lite mode: fewer memtables, with index/filter blocks charged to
+           the block cache. Set by the daemon from its `db-lite` option;
+           false keeps the standard profile. */
+        bool lowMemoryMode = false;
+
+        /* Rate limit for background compaction/flush disk writes, in bytes
+           per second. 0 means no limit. */
+        uint64_t compactionRateLimitBytes = 0;
+
         bool syncTrimmed;
 
         bool useExperimentalSerializer;
