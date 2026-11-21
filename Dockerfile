@@ -63,7 +63,7 @@ RUN --mount=type=bind,target=/usr/local/src/DeroGold,rw \
     if [ "${BUILDPLATFORM}" != "${TARGETPLATFORM}" ]; then \
         cmake --preset linux-${TARGETARCH}-gcc-cross-all -D CMAKE_INSTALL_PREFIX=/usr/local && cmake --build --preset linux-${TARGETARCH}-gcc-cross-all -t install -j $(nproc); \
     else \
-        cmake --preset linux-${TARGETARCH}-gcc-install && cmake --build --preset linux-${TARGETARCH}-gcc-install -j $(nproc); \
+        cmake --preset linux-${TARGETARCH}-gcc-install -D CMAKE_INSTALL_PREFIX=/usr/local && cmake --build --preset linux-${TARGETARCH}-gcc-install -j $(nproc); \
     fi
 
 ##################################################
