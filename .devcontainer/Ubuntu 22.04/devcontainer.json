@@ -28,11 +28,6 @@
 
 	"mounts": [
 		{
-			"source": "vcpkg-cache",
-			"target": "/root/.cache/vcpkg/archives",
-			"type": "volume"
-		},
-		{
 			"source": "ccache",
 			"target": "/root/.ccache",
 			"type": "volume"

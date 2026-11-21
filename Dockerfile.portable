@@ -1,0 +1,118 @@
+# syntax=docker/dockerfile:1
+
+# A portable Linux build, packaged.
+#
+# The point of this image is its base, not its contents. A binary cannot run
+# against a glibc older than the one it was linked with, and glibc 2.34 folded
+# libpthread, libdl and librt into libc itself - so every threaded program built
+# on Ubuntu 22.04 or newer demands GLIBC_2.34 and refuses to start on Ubuntu
+# 20.04, Debian 11 or RHEL 8. No compiler flag undoes that, which is why the
+# answer is a different base rather than a different build.
+#
+# Building here pins the floor at 20.04's glibc 2.31, which covers Ubuntu 20.04
+# and later and Debian 11 and later. Use this when the target machine is too
+# slow or too bare to build on itself.
+#
+# With BuildKit (Docker 23 and later, or DOCKER_BUILDKIT=1):
+#
+#   docker build -f Dockerfile.portable --target export --output type=local,dest=dist .
+#
+# On the legacy builder, where --output does not exist:
+#
+#   docker build -f Dockerfile.portable --target build -t derogold-portable .
+#   id=$(docker create derogold-portable)
+#   docker cp "$id:/src/build/Packaging" ./dist
+#   docker rm "$id"
+#
+# Either way you get the .tar.gz and .deb. libstdc++ and libgcc are already
+# linked statically by the main build; libssl and libc stay dynamic, so the
+# target needs libssl installed - it is present by default on any normal
+# server.
+#
+# This is separate from Dockerfile because that one builds the published
+# container image, where the build base and the runtime base are the same
+# modern Ubuntu and none of the above applies.
+
+ARG UBUNTU_VERSION=20.04
+
+# GCC 11 is the floor, not 10. The bundled RocksDB 11.8.1 writes
+# `using enum SizeApproximationFlags;` in db.h, and that particular C++20
+# feature (P1099R5) arrived in GCC 11 and Clang 13 - GCC 10 compiles the rest of
+# the header and then stops there with "expected nested-name-specifier before
+# 'enum'". Raise this to 12 or 13 if a future RocksDB needs more; the PPA below
+# carries them, and the compiler version has no bearing on the glibc floor.
+ARG GCC_VERSION=11
+
+# The compatibility floor this build targets, used to name the artifacts. It
+# describes what the binaries need, not what built them, which is the thing
+# someone receiving them actually has to check.
+ARG PACKAGE_SUFFIX=linux-x64-glibc2.31
+
+FROM ubuntu:${UBUNTU_VERSION} AS build
+ARG DEBIAN_FRONTEND=noninteractive
+ARG GCC_VERSION
+ARG PACKAGE_SUFFIX
+
+# Two repositories are added, and neither moves the glibc this links against -
+# both build against the distribution's own 2.31, which is the whole point.
+#
+#   ubuntu-toolchain-r/test  Ubuntu 20.04 tops out at gcc-10 in its own
+#                            repositories, and RocksDB 11 needs 11.
+#   apt.kitware.com          20.04 ships CMake 3.16 and the vendored RocksDB
+#                            expects newer. Same source the main Dockerfile uses.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl gpg software-properties-common && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    curl -fsSL https://apt.kitware.com/keys/kitware-archive-latest.asc \
+        | gpg --dearmor - > /usr/share/keyrings/kitware-archive-keyring.gpg && \
+    . /etc/os-release && \
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${UBUNTU_CODENAME} main" \
+        > /etc/apt/sources.list.d/kitware.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        binutils \
+        cmake \
+        file \
+        g++-${GCC_VERSION} \
+        gcc-${GCC_VERSION} \
+        git \
+        libssl-dev \
+        ninja-build \
+        pkg-config && \
+    rm -rf /var/lib/apt/lists/* && \
+    g++-${GCC_VERSION} --version | head -1 && \
+    cmake --version | head -1
+
+WORKDIR /src
+COPY . .
+
+# ARCH=default is the other half of portability: without it the build targets
+# whatever CPU happens to be compiling, and the binary dies with an illegal
+# instruction on anything older. SET_COMMIT_ID_IN_VERSION=OFF matches the
+# release configuration, keeping the version string to the release number.
+#
+# Deliberately no BuildKit-only syntax anywhere in this file - no --mount, no
+# heredocs. Plenty of installations still run the legacy builder, and a
+# portable build being unbuildable there would be a poor joke.
+RUN CC=gcc-${GCC_VERSION} CXX=g++-${GCC_VERSION} cmake -G Ninja \
+        -D CMAKE_BUILD_TYPE=Release \
+        -D ARCH=default \
+        -D SET_COMMIT_ID_IN_VERSION=OFF \
+        -D SET_PACKAGE_OUTPUT_SUFFIX="${PACKAGE_SUFFIX}" \
+        -S . -B build && \
+    cmake --build build && \
+    cmake --build build --target package
+
+# Report the floor that was actually achieved. If the base image is changed to
+# something newer this says so in the build log, rather than leaving it to be
+# discovered on a server that will not run the result.
+RUN echo "=== portable build summary ===" && \
+    echo "glibc floor : $(objdump -T build/src/DeroGoldd \
+        | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)" && \
+    echo "still linked: $(objdump -p build/src/DeroGoldd \
+        | awk '/NEEDED/ {printf "%s ", $2}')" && \
+    ls -lh build/Packaging
+
+FROM scratch AS export
+COPY --from=build /src/build/Packaging/ /

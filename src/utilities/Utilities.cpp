@@ -113,11 +113,14 @@ namespace Utilities
     {
         auto sleptFor = std::chrono::milliseconds::zero();
 
-        /* 0.5 seconds */
-        const auto sleepDuration = std::chrono::milliseconds(500);
+        /* 0.5 seconds max per iteration */
+        const auto maxSleepDuration = std::chrono::milliseconds(500);
 
         while (!condition && sleptFor < duration)
         {
+            const auto remaining = duration - sleptFor;
+            const auto sleepDuration = std::min(remaining, maxSleepDuration);
+
             std::this_thread::sleep_for(sleepDuration);
 
             sleptFor += sleepDuration;
@@ -173,6 +176,14 @@ namespace Utilities
         return timestamp;
     }
 
+    /* Converts a timestamp to a height. The inverse of scanHeightToTimestamp
+       above, and it has to walk the same three eras to be one: dividing the
+       whole span by DIFFICULTY_TARGET, as this did, values every block of the
+       last two and a half million at ten seconds when the chain has been
+       spending three hundred on each of them. In 2026 that answered roughly
+       24,000,000 for a chain 2,900,000 blocks long, and a wallet told to start
+       scanning there waits for a height that will not arrive for a century -
+       it sits at the tip reporting itself fully synced and finds nothing. */
     uint64_t timestampToScanHeight(const uint64_t timestamp)
     {
         if (timestamp == 0)
@@ -187,11 +198,48 @@ namespace Utilities
         }
 
         /* Find the amount of seconds between launch and the timestamp */
-        uint64_t launchTimestampDelta = timestamp - CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP;
+        uint64_t remaining = timestamp - CryptoNote::parameters::GENESIS_BLOCK_TIMESTAMP;
 
-        /* Get an estimation of the amount of blocks that have passed before the
-           timestamp */
-        return std::max<uint64_t>(0, (launchTimestampDelta / CryptoNote::parameters::DIFFICULTY_TARGET) - 10000);
+        uint64_t height = 0;
+
+        /* Spend the span on each era in turn, at that era's block time, for as
+           long as the era lasted. The block counts match the ones
+           scanHeightToTimestamp charges for, so the two agree. */
+        const uint64_t v1Blocks = CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT - 1;
+        const uint64_t v1Seconds = v1Blocks * CryptoNote::parameters::DIFFICULTY_TARGET;
+
+        if (remaining < v1Seconds)
+        {
+            height = remaining / CryptoNote::parameters::DIFFICULTY_TARGET;
+        }
+        else
+        {
+            remaining -= v1Seconds;
+
+            const uint64_t v2Blocks = CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT - 1
+                                      - CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT;
+            const uint64_t v2Seconds = v2Blocks * CryptoNote::parameters::DIFFICULTY_TARGET_V2;
+
+            if (remaining < v2Seconds)
+            {
+                height = CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT
+                         + remaining / CryptoNote::parameters::DIFFICULTY_TARGET_V2;
+            }
+            else
+            {
+                remaining -= v2Seconds;
+
+                height = CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT
+                         + remaining / CryptoNote::parameters::DIFFICULTY_TARGET_V3;
+            }
+        }
+
+        /* Blocks do not arrive at exactly their target rate, so start earlier
+           than the estimate says. Missing a transaction costs a wallet its
+           balance; scanning too far back costs it time. */
+        const uint64_t slack = 10000;
+
+        return height > slack ? height - slack : 0;
     }
 
     uint64_t getCurrentTimestampAdjusted()

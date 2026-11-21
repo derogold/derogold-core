@@ -36,7 +36,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    concurrency: 
+    concurrency:
       group: github_actions_clean_up
       cancel-in-progress: false
 
@@ -53,6 +53,6 @@ jobs:
           echo "Deleting caches..."
           for cacheKey in $cacheKeysForPR
           do
-              gh actions-cache delete $cacheKey -R ${{ github.repository }} -B ${{ github.ref }} --confirm
+              gh actions-cache delete $cacheKey -R ${{ github.repository }} -B ${{ github.ref_name }} --confirm
           done
           echo "Done"

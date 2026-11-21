@@ -12,6 +12,7 @@
 #include <config/CryptoNoteConfig.h>
 #include <cxxopts.hpp>
 #include <fstream>
+#include <iostream>
 #include <logging/ILogger.h>
 #include <rapidjson/document.h>
 #include <rapidjson/istreamwrapper.h>
@@ -36,9 +37,9 @@ namespace PaymentService
 
         options.add_options("Daemon")(
             "daemon-address",
-            "The daemon host to use for node operations",
+            "The daemon to use for node operations: a host, or the path of a daemon's IPC socket",
             cxxopts::value<std::string>()->default_value(config.daemonAddress),
-            "<ip>")(
+            "<host|path>")(
             "daemon-port",
             "The daemon RPC port to use for node operations",
             cxxopts::value<int>()->default_value(std::to_string(config.daemonPort)),

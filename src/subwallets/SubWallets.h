@@ -111,6 +111,14 @@ class SubWallets
         const bool takeFromAll,
         const uint64_t currentHeight) const;
 
+    /* Get the sum of the inputs we could actually build a transaction from.
+       The unlocked balance counts inputs that can never be spent, so it
+       overstates what is available to send. */
+    uint64_t getSpendableBalance(
+        std::vector<Crypto::PublicKey> subWalletsToTakeFrom,
+        const bool takeFromAll,
+        const uint64_t currentHeight) const;
+
     /* Remove any transactions at this height or above, they were on a
        forked chain */
     void removeForkedTransactions(const uint64_t forkHeight);

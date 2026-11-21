@@ -32,7 +32,9 @@ namespace CryptoNote
 
         logger(Logging::INFO) << "Opening DB in " << dataDir;
 
-        rocksdb::DB *dbPtr;
+        /* RocksDB 10 changed DB::Open to hand back a unique_ptr rather than a
+           raw pointer, so open straight into the member. */
+        std::unique_ptr<rocksdb::DB> dbPtr;
         const rocksdb::Options dbOptions = getDBOptions(config);
 
         if (const rocksdb::Status status = rocksdb::DB::Open(dbOptions, dataDir, &dbPtr); status.ok())
@@ -50,7 +52,7 @@ namespace CryptoNote
             throw std::system_error(make_error_code(error::DataBaseErrorCodes::INTERNAL_ERROR));
         }
 
-        db.reset(dbPtr);
+        db = std::move(dbPtr);
         state.store(INITIALIZED);
     }
 
@@ -245,15 +247,34 @@ namespace CryptoNote
         {
             const std::string dbData = getDataDir(config);
             const rocksdb::Options dbOptions = getDBOptions(config);
-            const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &rocksDb);
+
+            /* RocksDB 10 changed DB::Open to hand back a unique_ptr. This
+               branch owns the handle, and the ownsDbHandle flag below already
+               drives the matching close, so release it back to a raw pointer
+               and keep that arrangement. */
+            std::unique_ptr<rocksdb::DB> openedDb;
+
+            const rocksdb::Status openStatus = rocksdb::DB::Open(dbOptions, dbData, &openedDb);
             if (!openStatus.ok())
             {
                 throw std::runtime_error("Failed to open DB for optimization: " + openStatus.ToString());
             }
+
+            rocksDb = openedDb.release();
             ownsDbHandle = true;
         }
 
         setOptimizeHandle(rocksDb);
+
+        /* Close the window between marking the compaction as running and
+           publishing its handle. A cancel arriving in that window set the flag
+           but had no handle to call DisableManualCompaction on, so the
+           compaction ran to completion and shutdown blocked behind it. Now that
+           the handle is published, honour any cancel that arrived meanwhile. */
+        if (optimizeCancelRequested.load())
+        {
+            rocksDb->DisableManualCompaction();
+        }
 
         rocksdb::CompactRangeOptions compactRangeOptions;
         compactRangeOptions.exclusive_manual_compaction = true;
@@ -295,8 +316,14 @@ namespace CryptoNote
 
         rocksdb::Status compactStatus = rocksDb->CompactRange(compactRangeOptions, nullptr, nullptr);
 
+        // If cancel was requested via DisableManualCompaction(), re-enable before any further DB operations.
+        if (optimizeCancelRequested.load())
+        {
+            rocksDb->EnableManualCompaction();
+        }
+
         auto waitForCompactOptions = rocksdb::WaitForCompactOptions();
-        waitForCompactOptions.flush = true;
+        waitForCompactOptions.flush = !optimizeCancelRequested.load();
         waitForCompactOptions.close_db = ownsDbHandle;
         const rocksdb::Status waitStatus = rocksDb->WaitForCompact(waitForCompactOptions);
 
@@ -339,6 +366,13 @@ namespace CryptoNote
         }
 
         optimizeCancelRequested.store(true);
+
+        // Signal RocksDB to abort the ongoing CompactRange immediately.
+        std::lock_guard<std::mutex> lock(optimizeMutex);
+        if (optimizeDbHandle)
+        {
+            optimizeDbHandle->DisableManualCompaction();
+        }
 
         return true;
     }
@@ -440,7 +474,7 @@ namespace CryptoNote
         cfOptions.memtable_prefix_bloom_size_ratio = 0.02;
         cfOptions.memtable_whole_key_filtering = true;
 
-        columnFamilies.emplace_back(DB::V2::RAW_BLOCKS_CF, cfOptions);
+        columnFamilies.emplace_back("RawBlocks", cfOptions);
         columnFamilies.emplace_back("SpentKeyImages", cfOptions);
         columnFamilies.emplace_back("CachedTransactions", cfOptions);
         columnFamilies.emplace_back("PaymentIds", cfOptions);

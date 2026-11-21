@@ -57,17 +57,6 @@ namespace CryptoNote
 
         void serialize(ISerializer &s);
 
-        template<class Archive> void serialize(Archive &ar, const unsigned int version)
-        {
-            // clang-format off
-            ar & BOOST_NVP(blockHash);
-            ar & BOOST_NVP(timestamp);
-            ar & BOOST_NVP(cumulativeDifficulty);
-            ar & BOOST_NVP(alreadyGeneratedCoins);
-            ar & BOOST_NVP(alreadyGeneratedTransactions);
-            ar & BOOST_NVP(blockSize);
-            // clang-format on
-        }
     };
 
     struct PushedBlockInfo

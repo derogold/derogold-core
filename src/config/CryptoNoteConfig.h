@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <boost/uuid/uuid.hpp>
+#include <Uuid.h>
 #include <crypto/hash.h>
 #include <cstddef>
 #include <cstdint>
@@ -211,20 +211,15 @@ namespace CryptoNote
 
         const uint64_t FUSION_FEE_V1 = 1000000;
 
-        /* This sets the maximum number of fusion transactions that can be present in the pool
-            at any given time. Incoming fusion transactions that attempt to exceed this limit
-            will be rejected from the pool and will not be added. This mechanism is in place
-            to help curtail fusion transaction spam. */
-        const size_t FUSION_TX_MAX_POOL_COUNT = 130;
-
-        const size_t TX_MAX_POOL_COUNT = 260;
-
         const uint32_t UPGRADE_HEIGHT_V2 = 1;
         const uint32_t UPGRADE_HEIGHT_V3 = 2;
         const uint32_t UPGRADE_HEIGHT_V4 = 3; // Upgrade height for CN-Lite Variant 1 switch.
         const uint32_t UPGRADE_HEIGHT_V5 = 4; // Upgrade height for CN-Turtle Variant 2 switch.
         const uint32_t UPGRADE_HEIGHT_V6 = 2325000; // Upgrade height for DIFFICULTY_TARGET_V3
         const uint32_t UPGRADE_HEIGHT_V7 = 2420000; // Upgrade height for CN-UPX switch
+
+        const uint8_t DETERMINISTIC_FORK_CHOICE_FORK_INDEX = 11;
+        const uint32_t DETERMINISTIC_FORK_CHOICE_HEIGHT = 3000000;
 
         const uint32_t UPGRADE_HEIGHT_CURRENT = UPGRADE_HEIGHT_V7;
 
@@ -235,7 +230,7 @@ namespace CryptoNote
         static_assert(UPGRADE_VOTING_WINDOW > 1, "Bad UPGRADE_VOTING_WINDOW");
 
         /* Block heights we are going to have hard forks at */
-        const uint64_t FORK_HEIGHTS[] = {
+        constexpr uint64_t FORK_HEIGHTS[] = {
             700000, // 0
             1470000, // 1
             1980000, // 2
@@ -247,7 +242,7 @@ namespace CryptoNote
             2480000, // 8
             2500000, // 9
             2517000, // 10
-            3000000, // 11
+            DETERMINISTIC_FORK_CHOICE_HEIGHT, // 11
             3500000, // 12
             4000000, // 13
             4500000, // 14
@@ -257,9 +252,13 @@ namespace CryptoNote
         };
 
         /* MAKE SURE TO UPDATE THIS VALUE WITH EVERY MAJOR RELEASE BEFORE A FORK */
-        const uint64_t SOFTWARE_SUPPORTED_FORK_INDEX = 10;
+        const uint64_t SOFTWARE_SUPPORTED_FORK_INDEX = DETERMINISTIC_FORK_CHOICE_FORK_INDEX;
 
         const uint64_t FORK_HEIGHTS_SIZE = sizeof(FORK_HEIGHTS) / sizeof(*FORK_HEIGHTS);
+
+        static_assert(
+            FORK_HEIGHTS[DETERMINISTIC_FORK_CHOICE_FORK_INDEX] == DETERMINISTIC_FORK_CHOICE_HEIGHT,
+            "Deterministic fork-choice index and activation height disagree");
 
         /* The index in the FORK_HEIGHTS array that this version of the software will
            support. For example, if CURRENT_FORK_INDEX is 3, this version of the
@@ -285,6 +284,14 @@ namespace CryptoNote
         const char MINER_CONFIG_FILE_NAME[] = "miner_conf.json";
         /* Maximum allowable blocks to rewind from existing chain */
         const uint64_t MAX_BLOCK_ALLOWED_TO_REWIND = EXPECTED_NUMBER_OF_BLOCKS_PER_DAY * 3;
+
+        /* A lite node keeps no block bodies below its lite height, so it can
+           neither split nor rewind into that region - the records an undo needs
+           were never written. It must therefore stay at least this far below the
+           network top, so a reorg can never reach it. Well clear of
+           MAX_BLOCK_ALLOWED_TO_REWIND, which is three days. */
+        const uint32_t MIN_LITE_FULL_BLOCK_DEPTH =
+            static_cast<uint32_t>(EXPECTED_NUMBER_OF_BLOCKS_PER_DAY * 14);
 
         const uint64_t INPUT_NOT_SENDING = 1000;
     } // namespace parameters
@@ -337,9 +344,9 @@ namespace CryptoNote
 
     // P2P Network Configuration Section - This defines our current P2P network version
     // and the minimum version for communication between nodes
-    const uint8_t P2P_CURRENT_VERSION = 10;
+    const uint8_t P2P_CURRENT_VERSION = 11;
 
-    const uint8_t P2P_MINIMUM_VERSION = 9;
+    const uint8_t P2P_MINIMUM_VERSION = 11;
 
     // This defines the minimum P2P version required for lite blocks propogation
     const uint8_t P2P_LITE_BLOCKS_PROPOGATION_VERSION = 0;
@@ -356,6 +363,30 @@ namespace CryptoNote
     const uint32_t P2P_DEFAULT_HANDSHAKE_INTERVAL = 60; // seconds
     const uint32_t P2P_DEFAULT_PACKET_MAX_SIZE = 50000000; // 50000000 bytes maximum packet size
     const uint32_t P2P_DEFAULT_PEERS_IN_HANDSHAKE = 250;
+
+    /* Seed nodes are the only way back onto the network once every peer we
+       know has gone away, so they are re-asked while the node runs and not
+       just at the first start. A round is taken when no new peer could be
+       dialled and fewer than P2P_SEED_RETRY_OUT_PEERS_FLOOR outgoing
+       connections are left, and at most once per
+       P2P_SEED_RETRY_INTERVAL_SECONDS because the seeds serve everyone. */
+    const uint32_t P2P_SEED_RETRY_INTERVAL_SECONDS = 5 * 60;
+
+    const uint32_t P2P_SEED_RETRY_OUT_PEERS_FLOOR = 3;
+
+    /* Seed hostnames are looked up again this often, so a seed that changes
+       address is followed without a restart. */
+    const uint32_t P2P_SEED_RERESOLVE_INTERVAL_SECONDS = 60 * 60;
+
+    /* How long an address that would not connect is passed over for. Short
+       enough that a peer which was merely restarting comes back into play,
+       long enough that a dead one stops eating connection attempts. */
+    const uint32_t P2P_FAILED_PEER_FORGET_SECONDS = 30 * 60;
+
+    /* How often one gray peer is probed to find out whether it is still
+       there. Gray entries are hearsay from other nodes and are otherwise
+       never checked, so dead addresses circulate the network forever. */
+    const uint32_t P2P_GRAY_HOUSEKEEPING_INTERVAL_SECONDS = 30;
 
     const uint32_t P2P_DEFAULT_CONNECTION_TIMEOUT = 5000; // 5 seconds
     const uint32_t P2P_DEFAULT_PING_CONNECTION_TIMEOUT = 2000; // 2 seconds
@@ -377,7 +408,7 @@ namespace CryptoNote
 
     const std::string LICENSE_URL = "https://github.com/derogold/derogold/blob/master/LICENSE";
 
-    const static boost::uuids::uuid CRYPTONOTE_NETWORK = {
+    const static Common::Uuid CRYPTONOTE_NETWORK = {
         {0x20, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x20, 0x67, 0x65, 0x6e, 0x74, 0x6f, 0x6f, 0x20}};
 
     const char *const SEED_NODES[] = {

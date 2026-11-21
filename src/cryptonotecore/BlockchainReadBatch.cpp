@@ -8,7 +8,7 @@
 
 #include "DBUtils.h"
 
-#include <boost/range/combine.hpp>
+#include <json.hpp>
 #include <config/Constants.h>
 
 using namespace CryptoNote;
@@ -152,6 +152,30 @@ BlockchainReadBatch &BlockchainReadBatch::requestKeyOutputInfo(
     return *this;
 }
 
+BlockchainReadBatch &BlockchainReadBatch::requestTransactionPublicKey(const Crypto::Hash &txHash)
+{
+    state.transactionPublicKeys.emplace(txHash, Crypto::PublicKey {});
+    return *this;
+}
+
+BlockchainReadBatch &BlockchainReadBatch::requestTransactionPublicKeys(const std::vector<Crypto::Hash> &txHashes)
+{
+    for (const auto &hash : txHashes)
+    {
+        state.transactionPublicKeys.emplace(hash, Crypto::PublicKey {});
+    }
+    return *this;
+}
+
+BlockchainReadBatch &BlockchainReadBatch::requestWalletSyncBlocks(uint64_t startHeight, uint64_t endHeight)
+{
+    for (uint64_t i = startHeight; i < endHeight; ++i)
+    {
+        state.walletSyncBlocks.emplace(static_cast<uint32_t>(i), WalletTypes::WalletBlockInfo{});
+    }
+    return *this;
+}
+
 BlockchainReadResult BlockchainReadBatch::extractResult()
 {
     assert(resultSubmitted);
@@ -184,6 +208,8 @@ std::vector<std::string> BlockchainReadBatch::getRawKeys() const
     DB::serializeKeys(rawKeys, DB::PAYMENT_ID_TO_TX_HASH_PREFIX, state.transactionHashesByPaymentIds);
     DB::serializeKeys(rawKeys, DB::TIMESTAMP_TO_BLOCKHASHES_PREFIX, state.blockHashesByTimestamp);
     DB::serializeKeys(rawKeys, DB::KEY_OUTPUT_KEY_PREFIX, state.keyOutputKeys);
+    DB::serializeKeys(rawKeys, DB::TX_HASH_TO_PUBLIC_KEY_PREFIX, state.transactionPublicKeys);
+    DB::serializeKeys(rawKeys, DB::BLOCK_INDEX_TO_WALLET_SYNC_PREFIX, state.walletSyncBlocks);
 
     if (state.lastBlockIndex.second)
     {
@@ -309,12 +335,21 @@ const std::pair<uint32_t, bool> &BlockchainReadResult::getPruneFloor() const
     return state.pruneFloor;
 }
 
+const std::unordered_map<Crypto::Hash, Crypto::PublicKey> &BlockchainReadResult::getTransactionPublicKeys() const
+{
+    return state.transactionPublicKeys;
+}
+
+const std::unordered_map<uint32_t, WalletTypes::WalletBlockInfo> &BlockchainReadResult::getWalletSyncBlocks() const
+{
+    return state.walletSyncBlocks;
+}
+
 void BlockchainReadBatch::submitRawResult(const std::vector<std::string> &values, const std::vector<bool> &resultStates)
 {
     assert(state.size() == values.size());
     assert(values.size() == resultStates.size());
-    auto range = boost::combine(values, resultStates);
-    auto iter = range.begin();
+    DB::RawResultCursor iter(values, resultStates);
 
     DB::deserializeValues(state.spentKeyImagesByBlock, iter, DB::BLOCK_INDEX_TO_KEY_IMAGE_PREFIX);
     DB::deserializeValues(state.blockIndexesBySpentKeyImages, iter, DB::KEY_IMAGE_TO_BLOCK_INDEX_PREFIX);
@@ -331,13 +366,36 @@ void BlockchainReadBatch::submitRawResult(const std::vector<std::string> &values
     DB::deserializeValues(state.transactionHashesByPaymentIds, iter, DB::PAYMENT_ID_TO_TX_HASH_PREFIX);
     DB::deserializeValues(state.blockHashesByTimestamp, iter, DB::TIMESTAMP_TO_BLOCKHASHES_PREFIX);
     DB::deserializeValues(state.keyOutputKeys, iter, DB::KEY_OUTPUT_KEY_PREFIX);
+    DB::deserializeValues(state.transactionPublicKeys, iter, DB::TX_HASH_TO_PUBLIC_KEY_PREFIX);
+
+    /* Wallet sync blocks are stored as JSON strings — deserialize manually. */
+    for (auto it = state.walletSyncBlocks.begin(); it != state.walletSyncBlocks.end(); ++iter)
+    {
+        if (iter.found())
+        {
+            try
+            {
+                it->second = nlohmann::json::parse(iter.value()).get<WalletTypes::WalletBlockInfo>();
+            }
+            catch (const std::exception &)
+            {
+                it = state.walletSyncBlocks.erase(it);
+                continue;
+            }
+            ++it;
+        }
+        else
+        {
+            it = state.walletSyncBlocks.erase(it);
+        }
+    }
 
     DB::deserializeValue(state.lastBlockIndex, iter, DB::BLOCK_INDEX_TO_BLOCK_HASH_PREFIX);
     DB::deserializeValue(state.keyOutputAmountsCount, iter, DB::KEY_OUTPUT_AMOUNTS_COUNT_PREFIX);
     DB::deserializeValue(state.transactionsCount, iter, DB::TRANSACTION_HASH_TO_TRANSACTION_INFO_PREFIX);
     DB::deserializeValue(state.pruneFloor, iter, DB::PRUNE_FLOOR_PREFIX);
 
-    assert(iter == range.end());
+    assert(iter.exhausted());
 
     resultSubmitted = true;
 }
@@ -354,6 +412,7 @@ BlockchainReadState::BlockchainReadState(BlockchainReadState &&state):
     rawBlocks(std::move(state.rawBlocks)),
     blockHashesByTimestamp(std::move(state.blockHashesByTimestamp)),
     keyOutputKeys(std::move(state.keyOutputKeys)),
+    transactionPublicKeys(std::move(state.transactionPublicKeys)),
     closestTimestampBlockIndex(std::move(state.closestTimestampBlockIndex)),
     lastBlockIndex(std::move(state.lastBlockIndex)),
     keyOutputAmountsCount(std::move(state.keyOutputAmountsCount)),
@@ -361,7 +420,8 @@ BlockchainReadState::BlockchainReadState(BlockchainReadState &&state):
     transactionCountsByPaymentIds(std::move(state.transactionCountsByPaymentIds)),
     transactionHashesByPaymentIds(std::move(state.transactionHashesByPaymentIds)),
     transactionsCount(std::move(state.transactionsCount)),
-    pruneFloor(std::move(state.pruneFloor))
+    pruneFloor(std::move(state.pruneFloor)),
+    walletSyncBlocks(std::move(state.walletSyncBlocks))
 {
 }
 
@@ -372,6 +432,7 @@ size_t BlockchainReadState::size() const
            + keyOutputGlobalIndexesCountForAmounts.size() + keyOutputGlobalIndexesForAmounts.size() + rawBlocks.size()
            + closestTimestampBlockIndex.size() + keyOutputAmounts.size() + transactionCountsByPaymentIds.size()
            + transactionHashesByPaymentIds.size() + blockHashesByTimestamp.size() + keyOutputKeys.size()
+           + transactionPublicKeys.size() + walletSyncBlocks.size()
            + (lastBlockIndex.second ? 1 : 0) + (keyOutputAmountsCount.second ? 1 : 0)
            + (transactionsCount.second ? 1 : 0) + (pruneFloor.second ? 1 : 0);
 }

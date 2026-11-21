@@ -1,14 +1,8 @@
 build/
+build-*/
 
-vcpkg/buildtrees/
-vcpkg/build*/
-vcpkg/downloads/
-vcpkg/installed*/
-vcpkg/vcpkg_installed*/
-vcpkg/packages/
-vcpkg/scripts/buildsystems/tmp/
-vcpkg/*.exe
-vcpkg/*.zip
+# Left over from the old vcpkg-based build; never needed in an image.
+vcpkg/
 
 # Created by https://www.toptal.com/developers/gitignore/api/cmake,c++,visualstudio,visualstudiocode,clion+all,macos
 # Edit at https://www.toptal.com/developers/gitignore?templates=cmake,c++,visualstudio,visualstudiocode,clion+all,macos
@@ -598,3 +592,9 @@ FodyWeavers.xsd
 # Additional files built by Visual Studio
 
 # End of https://www.toptal.com/developers/gitignore/api/cmake,c++,visualstudio,visualstudiocode,clion+all,macos
+
+# Everything under external/ is vendored source, not build output. Several of
+# the generic rules above (build/, Makefile, [Bb]ackup/, *.a, [Bb]in/ and so
+# on) match real files in those trees. Without this the build context loses
+# external/zstd/build/cmake/CMakeLists.txt and the image fails to configure.
+!external/**

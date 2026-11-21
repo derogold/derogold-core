@@ -8,7 +8,7 @@
 
 #include "NetNodeConfig.h"
 
-#include <boost/uuid/uuid.hpp>
+#include <Uuid.h>
 #include <chrono>
 
 namespace CryptoNote
@@ -31,7 +31,7 @@ namespace CryptoNote
 
         size_t getWhiteListConnectionsPercent() const;
 
-        boost::uuids::uuid getNetworkId() const;
+        Common::Uuid getNetworkId() const;
 
         size_t getPeerListConnectRange() const;
 
@@ -46,7 +46,7 @@ namespace CryptoNote
 
         std::chrono::nanoseconds connectTimeout;
 
-        boost::uuids::uuid networkId;
+        Common::Uuid networkId;
 
         size_t expectedOutgoingConnectionsCount;
 

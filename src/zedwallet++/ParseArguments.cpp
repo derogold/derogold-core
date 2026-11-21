@@ -9,6 +9,7 @@
 
 #include "version.h"
 
+#include <common/IpcSocket.h>
 #include <config/CliHeader.h>
 #include <config/Config.h>
 #include <config/CryptoNoteConfig.h>
@@ -41,9 +42,10 @@ ZedConfig parseArguments(int argc, char **argv)
 
     options.add_options("Daemon")(
         "r,remote-daemon",
-        "The daemon <host:port> combination to use for node operations.",
+        "The daemon to use for node operations: a <host:port> combination, or "
+        "the path of a daemon's IPC socket.",
         cxxopts::value<std::string>(remoteDaemon)->default_value(defaultRemoteDaemon),
-        "<host:port>")
+        "<host:port|path>")
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         ("ssl",
@@ -151,6 +153,15 @@ ZedConfig parseArguments(int argc, char **argv)
         if (!Utilities::parseDaemonAddressFromString(config.host, config.port, remoteDaemon))
         {
             std::cout << "There was an error parsing the --remote-daemon you specified" << std::endl;
+            exit(1);
+        }
+
+        /* A socket path reaches here unchanged - it holds no colon to split on
+           - and Nigel will recognise it. Whether this build can open one is
+           worth settling now rather than at the first request. */
+        if (std::string error; !Common::Ipc::validateClientAddress(config.host, error))
+        {
+            std::cout << "Cannot use --remote-daemon " << config.host << ": " << error << std::endl;
             exit(1);
         }
     }

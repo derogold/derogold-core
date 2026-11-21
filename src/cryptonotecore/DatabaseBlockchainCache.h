@@ -23,7 +23,9 @@
 #include "common/StringView.h"
 #include "cryptonotecore/UpgradeManager.h"
 
+#include <deque>
 #include <IDataBase.h>
+#include <WalletTypes.h>
 #include <cryptonotecore/BlockchainReadBatch.h>
 #include <cryptonotecore/BlockchainWriteBatch.h>
 #include <cryptonotecore/DatabaseCacheData.h>
@@ -48,11 +50,24 @@ namespace CryptoNote
          * Constructs new DatabaseBlockchainCache object. Currnetly, only factories that produce
          * BlockchainCache objects as children are supported.
          */
+        /* liteHeight of 0 means full storage. Above zero, blocks below that
+           height are written index-only: the block bodies, transaction records,
+           payment ID index and timestamp index are never stored. Permanent for
+           the database, and settled once by the daemon before the cache is
+           built. See LITENODE.md. */
         DatabaseBlockchainCache(
             const Currency &currency,
             IDataBase &dataBase,
             IBlockchainCacheFactory &blockchainCacheFactory,
-            std::shared_ptr<Logging::ILogger> logger);
+            std::shared_ptr<Logging::ILogger> logger,
+            uint32_t liteHeight = 0);
+
+        /* 0 for a full node; otherwise the height from which full block data is
+           stored. */
+        uint32_t getLiteHeight() const
+        {
+            return liteHeight;
+        }
 
         static bool checkDBSchemeVersion(IDataBase &dataBase, std::shared_ptr<Logging::ILogger> logger);
 
@@ -278,25 +293,42 @@ namespace CryptoNote
 
         uint32_t getPruneFloor() const override;
 
+        /* Build wallet-sync-compatible WalletBlockInfo records for the pruned height range
+           [startHeight, endHeight).  Uses cached block info + cached transaction public keys
+           so results survive raw-block deletion.  Returns an empty vector if the requested
+           range is not pruned (i.e. raw blocks are still present) or on any error. */
+        std::vector<WalletTypes::WalletBlockInfo> getPrunedWalletBlocks(uint64_t startHeight,
+                                                                        uint64_t endHeight,
+                                                                        bool skipCoinbaseTransactions) const;
+
+        /* Binary-search for the lowest height >= fromHeight that has a raw block
+           in the DB. Returns storageBlockCount if none found. */
+        uint64_t getMinRawBlockHeight(uint64_t fromHeight) const;
+
       private:
+        /* Fallback reconstruction using cached block info + "k" prefix tx public keys.
+           Only called if "w" records are absent for a height range. */
+        std::vector<WalletTypes::WalletBlockInfo> getPrunedWalletBlocksLegacy(
+            uint64_t startHeight, uint64_t endHeight, bool skipCoinbaseTransactions) const;
+
         const Currency &currency;
 
         IDataBase &database;
 
         IBlockchainCacheFactory &blockchainCacheFactory;
 
-        mutable boost::optional<uint32_t> topBlockIndex;
+        mutable std::optional<uint32_t> topBlockIndex;
 
-        mutable boost::optional<Crypto::Hash> topBlockHash;
+        mutable std::optional<Crypto::Hash> topBlockHash;
 
         /* Cached prune floor (first block index whose raw data is still present).
          * Loaded lazily from the DB on first call to getPruneFloor() or
-         * pruneRawBlocksBefore(). boost::none means "not yet loaded from DB". */
-        mutable boost::optional<uint32_t> m_pruneFloor;
+         * pruneRawBlocksBefore(). std::nullopt means "not yet loaded from DB". */
+        mutable std::optional<uint32_t> m_pruneFloor;
 
-        mutable boost::optional<uint64_t> transactionsCount;
+        mutable std::optional<uint64_t> transactionsCount;
 
-        mutable boost::optional<uint32_t> keyOutputAmountsCount;
+        mutable std::optional<uint32_t> keyOutputAmountsCount;
 
         mutable std::unordered_map<Amount, int32_t> keyOutputCountsForAmounts;
 
@@ -307,6 +339,18 @@ namespace CryptoNote
         std::deque<CachedBlockInfo> unitsCache;
 
         const size_t unitsCacheSize = 1000;
+
+        /* 0 = full storage. Above zero, the height at and above which full block
+           data is kept. */
+        uint32_t liteHeight = 0;
+
+        /* True for the heights a lite node stores index-only. Genesis is always
+           excluded: the chain is anchored on it and several reads assume its
+           body is present. */
+        bool isLiteIndexOnlyHeight(const uint32_t blockIndex) const
+        {
+            return liteHeight != 0 && blockIndex != 0 && blockIndex < liteHeight;
+        }
 
         struct ExtendedPushedBlockInfo;
 
@@ -324,7 +368,8 @@ namespace CryptoNote
             const CachedTransaction &cachedTransaction,
             uint32_t blockIndex,
             uint16_t transactionBlockIndex,
-            BlockchainWriteBatch &batch);
+            BlockchainWriteBatch &batch,
+            WalletTypes::RawTransaction *walletTxOut = nullptr);
 
         uint32_t updateKeyOutputCount(Amount amount, int32_t diff) const;
 

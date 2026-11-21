@@ -54,15 +54,16 @@ std::vector<AdvancedCommand> allCommands()
         AdvancedCommand("make_integrated_address", "Make a combined address + payment ID", true, true),
         AdvancedCommand("incoming_transfers", "Show incoming transfers", true, true),
         AdvancedCommand("list_transfers", "Show all transfers", false, true),
-        AdvancedCommand("optimize", "Optimize your wallet to send large amounts", false, true),
         AdvancedCommand("outgoing_transfers", "Show outgoing transfers", false, true),
         AdvancedCommand("reset", "Recheck the chain from zero for transactions", true, true),
         AdvancedCommand("save", "Save your wallet state", true, true),
         AdvancedCommand("save_csv", "Save all wallet transactions to a CSV file", true, true),
-        AdvancedCommand("send_all", "Send all your balance to someone", false, true),
+        AdvancedCommand("send_all", "Send all your balance to someone (same as sweep_all)", false, true),
         AdvancedCommand("set_log_level", "Alter the logging level", true, true),
         AdvancedCommand("status", "Display sync status and network hashrate", true, true),
         AdvancedCommand("swap_node", "Specify a new daemon address/port to sync from", true, true),
+        AdvancedCommand("sweep", "Sweep an amount to an address, fees taken from the amount", false, true),
+        AdvancedCommand("sweep_all", "Sweep everything you can spend to an address", false, true),
     };
 }
 

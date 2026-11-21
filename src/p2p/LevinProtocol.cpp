@@ -17,7 +17,6 @@ namespace
 
     const uint32_t LEVIN_PACKET_RESPONSE = 0x00000002;
 
-    const uint32_t LEVIN_DEFAULT_MAX_PACKET_SIZE = 100000000; // 100MB by default
     const uint32_t LEVIN_PROTOCOL_VER_1 = 1;
 
 #pragma pack(push)
@@ -64,7 +63,7 @@ void LevinProtocol::sendMessage(uint32_t command, const BinaryArray &out, bool n
     writeStrict(writeBuffer.data(), writeBuffer.size());
 }
 
-bool LevinProtocol::readCommand(Command &cmd)
+bool LevinProtocol::readCommand(Command &cmd, uint64_t maxPacketSize)
 {
     bucket_head2 head = {0};
 
@@ -78,7 +77,7 @@ bool LevinProtocol::readCommand(Command &cmd)
         throw std::runtime_error("Levin signature mismatch");
     }
 
-    if (head.m_cb > LEVIN_DEFAULT_MAX_PACKET_SIZE)
+    if (head.m_cb > maxPacketSize)
     {
         throw std::runtime_error("Levin packet size is too big");
     }

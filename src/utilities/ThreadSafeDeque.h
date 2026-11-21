@@ -289,13 +289,16 @@ template<typename T> class ThreadSafeDeque
         return m_deque.size() * sizeof(T) + sizeof(m_deque);
     }
 
-    size_t memoryUsage(std::function<size_t(T)> memUsage) const
+    /* Takes the item by const reference. Taking it by value meant measuring the
+       memory used by the queue copied every element in it, once per call, on the
+       download hot path. */
+    size_t memoryUsage(std::function<size_t(const T &)> memUsage) const
     {
         /* Acquire the lock */
         std::unique_lock<std::mutex> lock(m_mutex);
 
         return std::accumulate(
-            m_deque.begin(), m_deque.end(), sizeof(m_deque), [&memUsage](const auto acc, const auto item) {
+            m_deque.begin(), m_deque.end(), sizeof(m_deque), [&memUsage](const size_t acc, const T &item) {
                 return acc + memUsage(item);
             });
     }

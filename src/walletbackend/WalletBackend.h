@@ -165,6 +165,10 @@ class WalletBackend
 
     uint64_t getTotalUnlockedBalance() const;
 
+    /* The balance we can actually send - the unlocked balance minus the inputs
+       that are too small, or too incomplete, to be spent */
+    uint64_t getSpendableBalance() const;
+
     /* Make a new sub wallet (gens a privateSpendKey) */
     std::tuple<Error, std::string, Crypto::SecretKey> addSubWallet();
 
@@ -197,6 +201,9 @@ class WalletBackend
     /* wallet sync height, local blockchain sync height,
        remote blockchain sync height */
     std::tuple<uint64_t, uint64_t, uint64_t> getSyncStatus() const;
+
+    /* Returns the prune floor reported by the daemon (0 if not pruned) */
+    uint64_t getPruneFloor() const;
 
     /* Get the wallet password */
     std::string getWalletPassword() const;
@@ -244,6 +251,12 @@ class WalletBackend
 
     /* Whether we have recieved info from the daemon at some point */
     bool daemonOnline() const;
+
+    /* True when this wallet was synced without coinbase scanning and is now
+       being asked to scan them. The blocks holding nothing but a coinbase were
+       never sent to it, so the ones already received can only be recovered by
+       a reset. */
+    bool coinbaseScanMissedBlocks() const;
 
     std::tuple<Error, std::string> getAddress(const Crypto::PublicKey spendKey) const;
 
@@ -301,7 +314,9 @@ class WalletBackend
 
     std::string unsafeToJSON() const;
 
-    void init();
+    /* Returns the result of the initial save to disk, so callers creating or
+       importing a wallet can report a wallet that could not be written. */
+    Error init();
 
     //////////////////////////////
     /* Private member variables */
@@ -325,6 +340,11 @@ class WalletBackend
     std::shared_ptr<WalletSynchronizerRAIIWrapper> m_syncRAIIWrapper;
 
     unsigned int m_syncThreadCount;
+
+    /* Set while loading, when the wallet on disk had not been scanning
+       coinbase transactions but this run is. */
+    bool m_coinbaseScanMissedBlocks = false;
+
     /* Ensure we only send one transaction in parallel, otherwise txs will likely fail. */
     std::mutex m_transactionMutex;
 };

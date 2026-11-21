@@ -8,6 +8,7 @@
 #include "PaymentGateService.h"
 
 #include "PaymentServiceJsonRpcServer.h"
+#include "common/IpcSocket.h"
 #include "common/ScopeExit.h"
 #include "common/SignalHandler.h"
 #include "common/Util.h"
@@ -147,7 +148,23 @@ void PaymentGateService::stop()
 
 void PaymentGateService::runRpcProxy(Logging::LoggerRef &log)
 {
+    /* A socket path is a daemon address like any other here, but only where
+       the build has AF_UNIX. Saying so by name beats the resolver reporting
+       that a path is not a host. */
+    if (std::string error; !Common::Ipc::validateClientAddress(config.serviceConfig.daemonAddress, error))
+    {
+        throw std::runtime_error(
+            "Cannot use daemon-address " + config.serviceConfig.daemonAddress + ": " + error);
+    }
+
     log(Logging::INFO) << "Starting Payment Gate with remote node, timeout: " << config.serviceConfig.initTimeout;
+
+    if (Common::Ipc::looksLikePath(config.serviceConfig.daemonAddress))
+    {
+        log(Logging::INFO) << "Reaching the daemon over "
+                           << Common::Ipc::describe(config.serviceConfig.daemonAddress);
+    }
+
     CryptoNote::Currency currency = currencyBuilder->currency();
 
     std::unique_ptr<CryptoNote::INode> node(PaymentService::NodeFactory::createNode(

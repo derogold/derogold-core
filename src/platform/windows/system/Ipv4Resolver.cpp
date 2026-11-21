@@ -9,6 +9,7 @@
 #include <cassert>
 #include <random>
 #include <stdexcept>
+#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -47,6 +48,41 @@ namespace System
         return *this;
     }
 
+    std::vector<Ipv4Address> Ipv4Resolver::resolveAll(const std::string &host)
+    {
+        /* Deliberately no dispatcher use: the seed resolver calls this from a
+           helper thread. getaddrinfo blocks on either thread anyway. */
+        addrinfo hints = {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+
+        addrinfo *addressInfos = nullptr;
+        int result = getaddrinfo(host.c_str(), NULL, &hints, &addressInfos);
+        if (result != 0)
+        {
+            throw std::runtime_error("Ipv4Resolver::resolveAll, getaddrinfo failed, " + errorMessage(result));
+        }
+
+        std::vector<Ipv4Address> addresses;
+
+        for (addrinfo *addressInfo = addressInfos; addressInfo != nullptr; addressInfo = addressInfo->ai_next)
+        {
+            if (addressInfo->ai_family != AF_INET)
+            {
+                continue;
+            }
+
+            addresses.emplace_back(ntohl(reinterpret_cast<sockaddr_in *>(addressInfo->ai_addr)->sin_addr.S_un.S_addr));
+        }
+
+        /* The whole list, from the head. The old code passed the randomly
+           chosen node instead, which leaked everything before it. */
+        freeaddrinfo(addressInfos);
+
+        return addresses;
+    }
+
     Ipv4Address Ipv4Resolver::resolve(const std::string &host)
     {
         assert(dispatcher != nullptr);
@@ -55,31 +91,14 @@ namespace System
             throw InterruptedException();
         }
 
-        addrinfo hints = {0, AF_INET, SOCK_STREAM, IPPROTO_TCP, 0, NULL, NULL, NULL};
-        addrinfo *addressInfos;
-        int result = getaddrinfo(host.c_str(), NULL, &hints, &addressInfos);
-        if (result != 0)
+        std::vector<Ipv4Address> addresses = resolveAll(host);
+        if (addresses.empty())
         {
-            throw std::runtime_error("Ipv4Resolver::resolve, getaddrinfo failed, " + errorMessage(result));
-        }
-
-        size_t count = 0;
-        for (addrinfo *addressInfo = addressInfos; addressInfo != nullptr; addressInfo = addressInfo->ai_next)
-        {
-            ++count;
+            throw std::runtime_error("Ipv4Resolver::resolve, no IPv4 address for host " + host);
         }
 
         std::mt19937 generator {std::random_device()()};
-        size_t index = std::uniform_int_distribution<size_t>(0, count - 1)(generator);
-        addrinfo *addressInfo = addressInfos;
-        for (size_t i = 0; i < index; ++i)
-        {
-            addressInfo = addressInfo->ai_next;
-        }
-
-        Ipv4Address address(ntohl(reinterpret_cast<sockaddr_in *>(addressInfo->ai_addr)->sin_addr.S_un.S_addr));
-        freeaddrinfo(addressInfo);
-        return address;
+        return addresses[std::uniform_int_distribution<std::size_t>(0, addresses.size() - 1)(generator)];
     }
 
 } // namespace System

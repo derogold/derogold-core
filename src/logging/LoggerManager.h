@@ -24,7 +24,7 @@ namespace Logging
         void operator()(
             const std::string &category,
             Level level,
-            boost::posix_time::ptime time,
+            std::chrono::system_clock::time_point time,
             const std::string &body) override;
 
       private:

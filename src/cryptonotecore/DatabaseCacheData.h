@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <boost/serialization/map.hpp>
 #include <cryptonotecore/BlockchainCache.h>
 
 namespace CryptoNote
@@ -20,15 +19,6 @@ namespace CryptoNote
 
         void serialize(CryptoNote::ISerializer &s);
 
-        template<class Archive> void serialize(Archive &ar, const unsigned int version)
-        {
-            // clang-format off
-            ar & BOOST_NVP(publicKey);
-            ar & BOOST_NVP(transactionHash);
-            ar & BOOST_NVP(unlockTime);
-            ar & BOOST_NVP(outputIndex);
-            // clang-format on
-        }
     };
 
     // inherit here to avoid breaking IBlockchainCache interface
@@ -39,13 +29,6 @@ namespace CryptoNote
             amountToKeyIndexes; // global key output indexes spawned in this transaction
         void serialize(ISerializer &s);
 
-        template<class Archive> void serialize(Archive &ar, const unsigned int version)
-        {
-            // clang-format off
-            ar & boost::serialization::base_object<CachedTransactionInfo>(*this);
-            ar & BOOST_NVP(amountToKeyIndexes);
-            // clang-format on
-        }
     };
 
 } // namespace CryptoNote

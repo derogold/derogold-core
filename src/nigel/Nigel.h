@@ -56,15 +56,31 @@ class Nigel
 
     uint64_t hashrate() const;
 
+    /* Empty when nothing is wrong. Otherwise what the daemon last said about
+       why it will not serve this wallet blocks - a thing retrying does not
+       fix, so somebody has to be told. */
+    std::string syncError() const;
+
+    static std::string extractDaemonError(const std::string &body);
+
+  private:
+    void setSyncError(const std::string &error);
+
+  public:
+
     std::tuple<uint64_t, std::string> nodeFee() const;
 
     std::tuple<std::string, uint16_t, bool> nodeAddress() const;
 
-    std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<WalletTypes::TopBlock>> getWalletSyncData(
-        const std::vector<Crypto::Hash> blockHashCheckpoints,
-        const uint64_t startHeight,
-        const uint64_t startTimestamp,
-        const bool skipCoinbaseTransactions);
+    /* Returns {success, blocks, topBlock, pruneFloor}.
+       pruneFloor > 0 means the daemon skipped a pruned range; the wallet should
+       advance its startHeight to pruneFloor on its next request. */
+    std::tuple<bool, std::vector<WalletTypes::WalletBlockInfo>, std::optional<WalletTypes::TopBlock>, uint64_t>
+        getWalletSyncData(
+            const std::vector<Crypto::Hash> blockHashCheckpoints,
+            const uint64_t startHeight,
+            const uint64_t startTimestamp,
+            const bool skipCoinbaseTransactions);
 
     /* Returns a bool on success or not */
     bool getTransactionsStatus(
@@ -110,11 +126,18 @@ class Nigel
                 {
                     nlohmann::json j = nlohmann::json::parse(res->body);
 
-                    Logger::logger.log(
-                        "Got response from daemon: " + j.dump(),
-                        Logger::TRACE,
-                        { Logger::SYNC, Logger::DAEMON }
-                    );
+                    /* Only serialise the response back to text when the trace
+                       level will actually record it. Building this string
+                       unconditionally re-serialised every block batch the
+                       daemon sent, just to throw it away. */
+                    if (Logger::logger.getLogLevel() >= Logger::TRACE)
+                    {
+                        Logger::logger.log(
+                            "Got response from daemon: " + j.dump(),
+                            Logger::TRACE,
+                            { Logger::SYNC, Logger::DAEMON }
+                        );
+                    }
 
                     if (verifyStatus)
                     {
@@ -134,10 +157,27 @@ class Nigel
 
                     return parseFunc(j);
                 }
-                catch (const nlohmann::json::exception &e)
+                /* Catch everything the parse callback can throw, not just JSON
+                   errors. Hex decoding and the transaction input variant cast
+                   both throw plain std::runtime_error / boost::bad_get on
+                   malformed daemon data, and those escaped this handler into
+                   the download thread, which has no handler of its own and so
+                   terminated the whole wallet. nlohmann's exceptions derive
+                   from std::exception, so this still covers them. */
+                catch (const std::exception &e)
                 {
                     Logger::logger.log(
                         failMessage + ": " + std::string(e.what()),
+                        Logger::INFO,
+                        { Logger::SYNC, Logger::DAEMON }
+                    );
+
+                    return std::nullopt;
+                }
+                catch (...)
+                {
+                    Logger::logger.log(
+                        failMessage + ": unknown error parsing daemon response",
                         Logger::INFO,
                         { Logger::SYNC, Logger::DAEMON }
                     );
@@ -208,6 +248,13 @@ class Nigel
 
     /* The hashrate (based on the last local block the daemon has synced) */
     std::atomic<uint64_t> m_lastKnownHashrate = 0;
+
+    /* Set when the daemon refuses this wallet's sync request for a reason of
+       its own, cleared the moment one succeeds. Read by whoever is asking for
+       wallet status, written by the download thread. */
+    mutable std::mutex m_syncErrorMutex;
+
+    std::string m_syncError;
 
     /* Whether the daemon is a blockchain cache API
        see: https://github.com/TurtlePay/blockchain-cache-api */

@@ -14,6 +14,7 @@
 
 #include <common/Base58.h>
 #include <common/FileSystemShim.h>
+#include <config/Config.h>
 #include <config/CryptoNoteConfig.h>
 #include <crypto/crypto.h>
 #include <crypto/random.h>
@@ -25,6 +26,7 @@
 #include <cryptopp/pwdbased.h>
 #include <cryptopp/sha.h>
 #include <errors/ValidateParameters.h>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <iomanip>
@@ -226,12 +228,11 @@ std::tuple<Error, std::shared_ptr<WalletBackend>> WalletBackend::importWalletFro
         daemonSSL,
         syncThreadCount));
 
-    wallet->init();
+    /* Report a wallet that could not be written to disk, rather than handing
+       back a working object with no file behind it. */
+    const Error initError = wallet->init();
 
-    /* Save to disk */
-    Error error = wallet->save();
-
-    return {error, wallet};
+    return {initError, wallet};
 }
 
 /* Imports a wallet from a private spend key and a view key. Returns
@@ -279,12 +280,11 @@ std::tuple<Error, std::shared_ptr<WalletBackend>> WalletBackend::importWalletFro
         daemonSSL,
         syncThreadCount));
 
-    wallet->init();
+    /* Report a wallet that could not be written to disk, rather than handing
+       back a working object with no file behind it. */
+    const Error initError = wallet->init();
 
-    /* Save to disk */
-    Error error = wallet->save();
-
-    return {error, wallet};
+    return {initError, wallet};
 }
 
 /* Imports a view wallet from a private view key and an address.
@@ -321,12 +321,11 @@ std::tuple<Error, std::shared_ptr<WalletBackend>> WalletBackend::importViewWalle
     const std::shared_ptr<WalletBackend> wallet(new WalletBackend(
         filename, password, privateViewKey, address, scanHeight, daemonHost, daemonPort, daemonSSL, syncThreadCount));
 
-    wallet->init();
+    /* Report a wallet that could not be written to disk, rather than handing
+       back a working object with no file behind it. */
+    const Error initError = wallet->init();
 
-    /* Save to disk */
-    Error error = wallet->save();
-
-    return {error, wallet};
+    return {initError, wallet};
 }
 
 /* Creates a new wallet with the given filename and password */
@@ -371,12 +370,11 @@ std::tuple<Error, std::shared_ptr<WalletBackend>> WalletBackend::createWallet(
         daemonSSL,
         syncThreadCount));
 
-    wallet->init();
+    /* Report a wallet that could not be written to disk, rather than handing
+       back a working object with no file behind it. */
+    const Error initError = wallet->init();
 
-    /* Save to disk */
-    Error error = wallet->save();
-
-    return {error, wallet};
+    return {initError, wallet};
 }
 
 bool WalletBackend::tryUpgradeWalletFormat(
@@ -633,33 +631,78 @@ Error WalletBackend::saveWalletJSONToDisk(std::string walletJSON, std::string fi
     /* Encrypt, and pad */
     StringSource(walletData, true, new StreamTransformationFilter(cbcEncryption, new StringSink(encryptedData)));
 
-    std::ofstream file(filename, std::ios_base::binary);
+    /* Write to a temporary file and rename it over the real one, so the wallet
+       is replaced in a single step.
+       Writing straight to the wallet truncated it first and only then wrote the
+       new contents, so anything that stopped the process in between — a second
+       Ctrl+C, a power loss — left a zero length or half written wallet whose
+       only recovery was the seed. */
+    const std::string tempFilename = filename + ".tmp";
 
-    if (!file)
+    {
+        std::ofstream file(tempFilename, std::ios_base::binary | std::ios_base::trunc);
+
+        if (!file)
+        {
+            Logger::logger.log(
+                std::string("Wallet filename: ") + filename + " is invalid",
+                Logger::FATAL,
+                {Logger::FILESYSTEM, Logger::SAVE});
+
+            return INVALID_WALLET_FILENAME;
+        }
+
+        /* Write the isAWalletIdentifier to the file, so when we open it we can
+           verify that it is a wallet file */
+        std::copy(
+            Constants::IS_A_WALLET_IDENTIFIER.begin(),
+            Constants::IS_A_WALLET_IDENTIFIER.end(),
+            std::ostreambuf_iterator<char>(file));
+
+        /* Write the salt to the file, so we can use it to unencrypt the file
+           later. Note that the salt is unencrypted. */
+        std::copy(std::begin(salt), std::end(salt), std::ostreambuf_iterator<char>(file));
+
+        /* Write the encrypted wallet data to the file */
+        std::copy(encryptedData.begin(), encryptedData.end(), std::ostreambuf_iterator<char>(file));
+
+        file.flush();
+
+        /* Check the write actually succeeded before we replace the existing
+           wallet with it. */
+        if (!file)
+        {
+            Logger::logger.log(
+                std::string("Failed to write wallet file: ") + tempFilename,
+                Logger::FATAL,
+                {Logger::FILESYSTEM, Logger::SAVE});
+
+            file.close();
+            std::error_code ignored;
+            std::filesystem::remove(tempFilename, ignored);
+
+            return INVALID_WALLET_FILENAME;
+        }
+    }
+
+    std::error_code renameError;
+
+    /* rename() replaces the destination atomically on POSIX. On Windows the
+       destination must not exist, so remove it first; the temporary file still
+       holds a complete wallet if anything fails between the two calls. */
+    std::filesystem::remove(filename, renameError);
+    std::filesystem::rename(tempFilename, filename, renameError);
+
+    if (renameError)
     {
         Logger::logger.log(
-            std::string("Wallet filename: ") + filename + " is invalid",
+            std::string("Failed to replace wallet file: ") + renameError.message()
+                + ". The newly written wallet is at " + tempFilename,
             Logger::FATAL,
             {Logger::FILESYSTEM, Logger::SAVE});
 
         return INVALID_WALLET_FILENAME;
     }
-
-    std::string saltString = std::string(salt, salt + sizeof(salt));
-
-    /* Write the isAWalletIdentifier to the file, so when we open it we can
-       verify that it is a wallet file */
-    std::copy(
-        Constants::IS_A_WALLET_IDENTIFIER.begin(),
-        Constants::IS_A_WALLET_IDENTIFIER.end(),
-        std::ostreambuf_iterator<char>(file));
-
-    /* Write the salt to the file, so we can use it to unencrypt the file
-       later. Note that the salt is unencrypted. */
-    std::copy(std::begin(salt), std::end(salt), std::ostreambuf_iterator<char>(file));
-
-    /* Write the encrypted wallet data to the file */
-    std::copy(encryptedData.begin(), encryptedData.end(), std::ostreambuf_iterator<char>(file));
 
     return SUCCESS;
 }
@@ -668,7 +711,7 @@ Error WalletBackend::saveWalletJSONToDisk(std::string walletJSON, std::string fi
 /* CLASS FUNCTIONS */
 /////////////////////
 
-void WalletBackend::init()
+Error WalletBackend::init()
 {
     if (m_daemon == nullptr)
     {
@@ -699,10 +742,27 @@ void WalletBackend::init()
 
     m_walletSynchronizer->setSubWallets(m_subWallets);
 
+    /* Persist wallet state BEFORE starting sync.  Callers (importWallet,
+       createWallet, etc.) used to call save() right after init(), which
+       stopped the just-started sync — forcing a join() that blocks until
+       the in-flight /getrawblocks HTTP response arrives (10+ seconds on
+       slow daemons).  The fetched blocks were then discarded and had to
+       be re-requested.  By saving here, the wallet is already on disk
+       when sync begins, and the callers' save() finds nothing new to
+       write.
+
+       The result is returned rather than discarded: a wallet that cannot be
+       written to disk is a real failure, and swallowing it meant creating a
+       wallet into an unwritable path reported success, handed back an address,
+       and left no file behind. */
+    const Error saveError = unsafeSave();
+
     /* Launch the wallet sync process in a background thread */
     m_walletSynchronizer->start();
 
     m_syncRAIIWrapper = std::make_shared<WalletSynchronizerRAIIWrapper>(m_walletSynchronizer);
+
+    return saveError;
 }
 
 Error WalletBackend::save() const
@@ -748,6 +808,15 @@ uint64_t WalletBackend::getTotalUnlockedBalance() const
     const auto [unlockedBalance, lockedBalance] = getTotalBalance();
 
     return unlockedBalance;
+}
+
+/* Gets the balance that can actually be spent, across all the wallets in the
+   container */
+uint64_t WalletBackend::getSpendableBalance() const
+{
+    const bool takeFromAll = true;
+
+    return m_subWallets->getSpendableBalance({}, takeFromAll, m_daemon->networkBlockCount());
 }
 
 /* This is simply a wrapper for Transfer::sendTransactionBasic - we need to
@@ -946,6 +1015,11 @@ std::tuple<uint64_t, uint64_t, uint64_t> WalletBackend::getSyncStatus() const
     return {walletBlockCount, localDaemonBlockCount, networkBlockCount};
 }
 
+uint64_t WalletBackend::getPruneFloor() const
+{
+    return m_walletSynchronizer->getPruneFloor();
+}
+
 std::string WalletBackend::getWalletPassword() const
 {
     return m_password;
@@ -1050,6 +1124,13 @@ WalletTypes::WalletStatus WalletBackend::getStatus() const
 
     status.peerCount = m_daemon->peerCount();
     status.lastKnownHashrate = m_daemon->hashrate();
+    status.syncError = m_daemon->syncError();
+
+    const auto [forkCount, lastForkHeight, lastForkDepth] = m_walletSynchronizer->getForkInfo();
+
+    status.forkCount = forkCount;
+    status.lastForkHeight = lastForkHeight;
+    status.lastForkDepth = lastForkDepth;
 
     return status;
 }
@@ -1061,27 +1142,20 @@ std::vector<WalletTypes::Transaction>
 {
     std::vector<WalletTypes::Transaction> result;
 
-    try {
-        const auto transactions = getTransactions();
+    /* This used to swallow every exception and return whatever it had, so a
+       failure came back as an empty range - indistinguishable from a range
+       that really holds no transactions, and silently wrong for anyone
+       reading a wallet's history a window at a time. Letting it out means the
+       caller is told. */
+    const auto transactions = getTransactions();
 
-        if (!transactions.empty())
-        {
-            std::copy_if(
-                transactions.begin(),
-                transactions.end(),
-                std::back_inserter(result),
-                [&startHeight, &endHeight](const auto tx) {
-                    return tx.blockHeight >= startHeight && tx.blockHeight < endHeight;
-                });
-
-            return result;
-        } else
-        {
-            return std::vector<WalletTypes::Transaction> {};
-        }
-    } catch (const std::exception &)
-    {
-    }
+    std::copy_if(
+        transactions.begin(),
+        transactions.end(),
+        std::back_inserter(result),
+        [&startHeight, &endHeight](const auto &tx) {
+            return tx.blockHeight >= startHeight && tx.blockHeight < endHeight;
+        });
 
     return result;
 }
@@ -1156,6 +1230,14 @@ std::string WalletBackend::unsafeToJSON() const
     writer.Key("walletFileFormatVersion");
     writer.Uint(Constants::WALLET_FILE_FORMAT_VERSION);
 
+    /* Travels with the wallet, because it decides which blocks the daemon
+       sends: with it off, blocks holding nothing but a coinbase are skipped
+       and the sync status moves past them. A wallet that has done that cannot
+       be caught up by turning the flag on later, so the wallet has to be able
+       to say which way it was synced. */
+    writer.Key("scanCoinbaseTransactions");
+    writer.Bool(!Config::config.wallet.skipCoinbaseTransactions);
+
     writer.Key("subWallets");
     m_subWallets->toJSON(writer);
 
@@ -1182,7 +1264,45 @@ Error WalletBackend::fromJSON(const rapidjson::Document &j)
     m_walletSynchronizer = std::make_shared<WalletSynchronizer>();
     m_walletSynchronizer->fromJSON(getObjectFromJSON(j, "walletSynchronizer"));
 
+    /* Wallets written before this was recorded are taken at the default, which
+       is what they were synced with. */
+    const bool walletScannedCoinbase =
+        hasMember(j, "scanCoinbaseTransactions") ? getBoolFromJSON(j, "scanCoinbaseTransactions") : false;
+
+    const bool askedToScanCoinbase = !Config::config.wallet.skipCoinbaseTransactions;
+
+    if (walletScannedCoinbase && !askedToScanCoinbase)
+    {
+        /* The wallet remembers. Dropping it silently on an open without the
+           flag would leave the wallet skipping blocks it has been counting on,
+           and every coinbase from here on would need another reset to find. */
+        Config::config.wallet.skipCoinbaseTransactions = false;
+
+        Logger::logger.log(
+            "Wallet was synced with coinbase scanning, keeping it on",
+            Logger::INFO,
+            {Logger::SYNC});
+    }
+    else if (askedToScanCoinbase && !walletScannedCoinbase)
+    {
+        /* Only the blocks from here on will carry coinbase transactions. The
+           ones already skipped are behind the sync status and will not be
+           requested again without a reset. */
+        m_coinbaseScanMissedBlocks = true;
+
+        Logger::logger.log(
+            "Wallet was synced without coinbase scanning - coinbase transactions "
+            "received before now need a reset to be found",
+            Logger::WARNING,
+            {Logger::SYNC});
+    }
+
     return SUCCESS;
+}
+
+bool WalletBackend::coinbaseScanMissedBlocks() const
+{
+    return m_coinbaseScanMissedBlocks;
 }
 
 Error WalletBackend::fromJSON(
@@ -1205,7 +1325,15 @@ Error WalletBackend::fromJSON(
 
     m_daemon = std::make_shared<Nigel>(daemonHost, daemonPort, daemonSSL);
 
-    init();
+    /* Opening an existing wallet: the data is already on disk, so a failure to
+       write it back is worth reporting but is not a reason to refuse the open. */
+    if (const Error saveError = init(); saveError != SUCCESS)
+    {
+        Logger::logger.log(
+            "Failed to write wallet to disk while opening it: " + saveError.getErrorMessage(),
+            Logger::WARNING,
+            {Logger::FILESYSTEM});
+    }
 
     return SUCCESS;
 }

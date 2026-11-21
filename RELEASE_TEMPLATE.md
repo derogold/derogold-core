@@ -1,4 +1,11 @@
-# Change Logs from v1.0.0
+# DeroGold v1.0.2.0
+
+## Mandatory network upgrade
+
+- Fork index 11 activates at block **3,000,000**.
+- At and after the fork, equal-work competing branches converge deterministically by choosing the lower hash at the first differing block after their common ancestor. Greater cumulative work continues to win at every height.
+- P2P protocol version 11 is mandatory. Earlier node releases are intentionally disconnected and must upgrade before block 3,000,000.
+- Validated alternative full and lite blocks are relayed, allowing competing pools to learn about and converge on the winning branch.
 
 ## Daemon
 - Changed seed node address.
@@ -6,8 +13,6 @@
 - Fixed daemon rpc method would fail due to missing transactions.
 - Fixed `--db-*` options such that it will no longer get overridden by default values.
 - Added `--db-optimize` option to optimize your database for reading.
-- Added `--export-checkpoints` option to export checkpoints.csv for bootstrapping.
-- Added `--enable-trtl-rpc` option to enable turtlecoin rpc api.
 - Changed `--db-enable-compression` to true by default.
 - Changed `status` command behaviour so that it doesn't rely on rpc anymore.
 - Added `--sync-from-height=<height>` option to bootstrap a fresh node from a recent checkpoint, skipping the full 350 GB+ historical chain download. Supported floor heights: 1,000,000 / 1,500,000 / 2,000,000 / 2,500,000 / 2,700,000 (recommended).
@@ -18,48 +23,62 @@
 - Added `prune_status` daemon console command to show prune mode, depth, and current prune floor height.
 - Added `compact_db [start|status|wait|stop]` daemon console command to manually manage RocksDB compaction.
 - Added `db_status` daemon console command to show database size and file statistics.
-- Added automatic adaptive RocksDB compaction scheduler (60s interval during sync, 30min near chain tip).
+- Removed the automatic full-range RocksDB compaction scheduler. RocksDB retains its normal incremental background compaction; operators can still run deliberate maintenance with `compact_db start` or `--db-optimize`.
+- Fixed competing-chain handling so every accepted alternative branch is evaluated and reorganisation cleanup no longer performs quadratic mempool work.
+- Removed legacy mempool count brakes, including the 130 zero-fee/fusion transaction cap. Transaction proof-of-work remains enforced.
+- Restored the `--enable-mining` control and reject `--sync-from-height` together with mining RPC or built-in Stratum. Bootstrap databases also reject block-template and block-submission RPC calls at runtime.
+
+## Wallet
+- Removed the `optimize` command, and with it the fusion transactions the wallet used to send.
+- Added `sweep` command to sweep an amount to an address, taking the fees out of the amount swept rather than adding them on top.
+- Added `sweep_all` command to sweep everything that can be spent to an address.
+- Changed `send_all` to sweep, so it no longer needs a balance beyond what is being sent to pay the fee.
+- Changed a transfer too large to fit in a block to be offered as several smaller transactions, instead of optimizing the wallet first.
 
 ## P2P
 - Changed p2p block downloading to dynamic block rate based on system load.
 
 ## RocksDB
-- Update RocksDB provider to v9.2.1.
-- Changed RocksDB default read/write buffer to 2048 MB and 1024 MB respectively.
+- Update RocksDB to v11.8.1, now vendored in `external/rocksdb` and compiled with the project rather than downloaded during the build.
+- Changed RocksDB default read/write buffer to 256 MB and 64 MB respectively.
 - Changed RocksDB logger output and reduced the file history to 1.
 
 ## External Dependencies Version
-- boost 1.86.0
-- cpp-httplib 0.18.0
+
+All vendored in `external/` and built with the project, except OpenSSL. There
+are no submodules and nothing is downloaded during the build. See
+[external/README.md](external/README.md).
+
+- cpp-httplib 0.14.3
+- cpp-linenoise (upstream snapshot)
 - cryptopp 8.9.0
-- cxxopts 3.2.1
-- leveldb 1.23
-- miniupnpc 2.3.7
-- openssl 3.4.0
-- rapidjson 2023-07-17
-- rocksdb 9.7.2
+- cxxopts 3.2.0
+- miniupnpc 2.2.8
+- nlohmann-json 3.2.0
+- openssl (system package)
+- rapidjson 1.1.0
+- rocksdb 11.8.1
+- zstd 1.5.7
 
 # Install Notes
 
-## For Windows user: (x64)
-- Download `DeroGold-windows-x64-msvc.zip` and unzip.
+Release binaries are built for Linux. Windows and macOS are supported by the
+build itself — see [BUILDING.md](BUILDING.md) — but are not published here.
 
 ## For Linux user: (x64)
 - (**Debian package installer**) Download `DeroGold-linux-x64-gcc.deb` to install via `sudo apt install ./DeroGold-linux-x64-gcc.deb`.
 - Download `DeroGold-linux-x64-gcc.tar.gz` and use `tar -xf DeroGold-linux-x64-gcc.tar.gz` to unzip.
 
 ## For Linux user: (arm64 / aarch64 — OrangePi5, Raspberry Pi, etc.)
-- Download `DeroGold-linux-arm64-gcc.tar.gz` and use `tar -xf DeroGold-linux-arm64-gcc.tar.gz` to unzip.
-
-## For MacOS user: (x64)
-- Download `DeroGold-osx-x64-clang.tar.gz` and use `tar -xf DeroGold-osx-x64-clang.tar.gz` to unzip.
+- (**Debian package installer**) Download `DeroGold-linux-arm64-gcc-cross.deb` to install via `sudo apt install ./DeroGold-linux-arm64-gcc-cross.deb`.
+- Download `DeroGold-linux-arm64-gcc-cross.tar.gz` and use `tar -xf DeroGold-linux-arm64-gcc-cross.tar.gz` to unzip.
 
 # Fast Sync Note
 
 New in this release: you can skip downloading the full chain history by using `--sync-from-height`:
 
 ```
-./DeroGoldd --sync-from-height=2700000
+./DeroGoldd --sync-from-height=2700000 --enable-mining=false
 ```
 
 See the [README](README.md#fast-sync---sync-from-height) for full details and all supported heights.

@@ -89,8 +89,8 @@ namespace SendTransaction
         /* The raw transaction */
         CryptoNote::Transaction transaction;
 
-        /* The transaction outputs, before converted into boost uglyness, used
-           for determining key inputs from the tx that belong to us */
+        /* The transaction outputs, before conversion into the prefix's variant
+           types, used for determining key inputs from the tx that belong to us */
         std::vector<WalletTypes::KeyOutput> outputs;
 
         /* The random key pair we generated */

@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: true
@@ -48,100 +48,66 @@ jobs:
     name: ${{ matrix.build_preset }}
     runs-on: ${{ matrix.os }}
     needs: env
-    if: github.event.inputs.draft_release
+    if: inputs.draft_release
 
-    concurrency: 
+    concurrency:
       group: build_derogold_${{ github.ref }}_${{ matrix.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            arch: x64
-            compiler: msvc
-            install: ""
-            configure_preset: windows-x64-msvc-package
-            build_preset: windows-x64-msvc-package
-
-          - os: ubuntu-20.04
+          # Linux only. Windows packages are produced by the MSYS2 MinGW jobs
+          # in build-derogold.yml; there is no MSVC job anywhere, because with
+          # vcpkg gone there is no OpenSSL package source for MSVC.
+          - os: ubuntu-22.04
             arch: x64
             compiler: gcc
             install: >-
               build-essential
               cmake
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-x64-gcc-package
             build_preset: linux-x64-gcc-package
 
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             arch: arm64
             compiler: gcc
             install: >-
               cmake
               crossbuild-essential-arm64
-              curl
               git
+              libssl-dev
               ninja-build
               pkg-config
-              tar
-              unzip
-              zip
             configure_preset: linux-arm64-gcc-cross-package
             build_preset: linux-arm64-gcc-cross-package
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
 
       - name: Install Program / Dependencies
+        if: runner.os == 'Linux'
         run: |
-          if ("${{ runner.os }}" -eq "Windows")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              choco install -y ${{ matrix.install }}
-            }
-          }
-          elseif ("${{ runner.os }}" -eq "Linux")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              sudo apt-get update
-              sudo apt-get install -y ${{ matrix.install }}
-            }
-          }
-          elseif ("${{ runner.os }}" -eq "macOS")
-          {
-            if (![string]::IsNullOrWhiteSpace("${{ matrix.install }}"))
-            {
-              brew update
-              brew install ${{ matrix.install }}
-            }
-          }
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.install }}
 
       - name: Install CMake
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v3.31.6
 
       - name: Setup ccache
-        uses: jianmingyong/ccache-action@v1
+        uses: jianmingyong/ccache-action@v1.4.0
         with:
           ccache-key-prefix: ccache_cache_${{ runner.os }}_${{ matrix.arch }}_${{ matrix.compiler }}
           max-size: 150M
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11.5
-
-      - name: Build DeroGold (MSVC/GCC/CLANG)
+      - name: Build DeroGold
         uses: lukka/run-cmake@v10.8
         with:
           configurePreset: '${{ matrix.configure_preset }}'
@@ -151,13 +117,13 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-vcpkg-build-logs
-          path: ${{ github.workspace }}/vcpkg/buildtrees/**/*.log
+          name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-cmake-logs
+          path: ${{ github.workspace }}/build/**/*.log
           if-no-files-found: ignore
 
       - name: Upload Package
         uses: actions/upload-artifact@v4
-        if: success() 
+        if: success()
         with:
           name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.compiler }}-build
           path: |
@@ -173,7 +139,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -192,8 +158,8 @@ jobs:
         with:
           body_path: ${{ github.workspace }}/RELEASE_TEMPLATE.md
           name: v${{ needs.env.outputs.version }}
-          tag_name: ${{ needs.env.outputs.version }}
-          draft: ${{ github.event.inputs.draft_release }}
+          tag_name: v${{ needs.env.outputs.version }}
+          draft: ${{ inputs.draft_release }}
           files: |
             ${{ github.workspace }}/build/*.zip
             ${{ github.workspace }}/build/*.tar.gz
@@ -220,12 +186,6 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
       - id: env
         run: |
           $output = @()
@@ -237,7 +197,6 @@ jobs:
           }
 
           echo tags=$([string]::Join(",", $output)) >> "$env:GITHUB_OUTPUT"
-          echo ACTIONS_CACHE_URL=$env:ACTIONS_CACHE_URL >> "$env:GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -251,9 +210,5 @@ jobs:
           no-cache-filters: |
             build
           build-args: |
-            UBUNTU_VERSION=20.04
-            VCPKG_BINARY_SOURCES=clear;x-gha,readwrite
-            ACTIONS_CACHE_URL=${{ steps.env.outputs.ACTIONS_CACHE_URL }}
-          secret-envs: |
-            ACTIONS_RUNTIME_TOKEN=ACTIONS_RUNTIME_TOKEN
-          push: ${{ github.event.inputs.docker_push }}
+            UBUNTU_VERSION=22.04
+          push: ${{ inputs.docker_push }}

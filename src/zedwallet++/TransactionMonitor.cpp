@@ -21,35 +21,36 @@ void TransactionMonitor::start()
 
     while (!m_shouldStop)
     {
-        /* Make sure we're not printing a garbage tx */
+        /* Block until a transaction arrives, or until stop() wakes us.
+           This loop used to spin on size(), burning a core for the entire
+           session and competing with the sync threads for it. */
+        const auto tx = m_queuedTransactions.front();
+
+        /* Make sure we're not printing a garbage tx. front() returns a
+           default-constructed sentinel once the queue has been stopped. */
         if (m_shouldStop)
         {
             break;
         }
 
-        if (m_queuedTransactions.size() > 0)
+        /* Don't print out fusion or outgoing transactions */
+        if (!tx.isFusionTransaction() && tx.totalAmount() > 0)
         {
-            const auto tx = m_queuedTransactions.front();
+            /* Aquire the lock, so we're not interleaving our output when a
+               command is being handled, for example, transferring */
+            std::scoped_lock lock(*m_mutex);
 
-            /* Don't print out fusion or outgoing transactions */
-            if (!tx.isFusionTransaction() && tx.totalAmount() > 0)
-            {
-                /* Aquire the lock, so we're not interleaving our output when a
-                   command is being handled, for example, transferring */
-                std::scoped_lock lock(*m_mutex);
+            std::cout << InformationMsg("\nNew transaction found!\n\n");
 
-                std::cout << InformationMsg("\nNew transaction found!\n\n");
+            printIncomingTransfer(tx);
 
-                printIncomingTransfer(tx);
-
-                /* Write out the prompt after every transfer. This prevents the
-                   wallet being in a 'ready' state, waiting for input, but looking
-                   like it's not. */
-                std::cout << InformationMsg(prompt) << std::flush;
-            }
-
-            m_queuedTransactions.deleteFront();
+            /* Write out the prompt after every transfer. This prevents the
+               wallet being in a 'ready' state, waiting for input, but looking
+               like it's not. */
+            std::cout << InformationMsg(prompt) << std::flush;
         }
+
+        m_queuedTransactions.deleteFront();
     }
 
     m_walletBackend->m_eventHandler->onTransaction.unsubscribe();

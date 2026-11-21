@@ -167,7 +167,7 @@ namespace CryptoNote
 
     void TransactionPrefixImpl::getInput(size_t index, KeyInput &input) const
     {
-        input = boost::get<KeyInput>(getInputChecked(m_txPrefix, index, TransactionTypes::InputType::Key));
+        input = std::get<KeyInput>(getInputChecked(m_txPrefix, index, TransactionTypes::InputType::Key));
     }
 
     size_t TransactionPrefixImpl::getOutputCount() const
@@ -191,7 +191,7 @@ namespace CryptoNote
     void TransactionPrefixImpl::getOutput(size_t index, KeyOutput &output, uint64_t &amount) const
     {
         const auto &out = getOutputChecked(m_txPrefix, index, TransactionTypes::OutputType::Key);
-        output = boost::get<KeyOutput>(out.target);
+        output = std::get<KeyOutput>(out.target);
         amount = out.amount;
     }
 

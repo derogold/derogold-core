@@ -5,6 +5,7 @@
 // Please see the included LICENSE file for more information.
 
 #include "TransactionPool.h"
+#include "TransactionPoolPolicy.h"
 
 #include "CryptoNoteBasicImpl.h"
 #include "common/TransactionExtra.h"
@@ -19,94 +20,13 @@ namespace CryptoNote
         const CachedTransaction &left = lhs.cachedTransaction;
         const CachedTransaction &right = rhs.cachedTransaction;
 
-        /* We want to work out if fee per byte(lhs) is greater than fee per byte(rhs).
-         * Fee per byte is calculated by (lhs.fee / lhs.size) > (rhs.fee / rhs.size).
-         * We can rearrange this to (lhs.fee * rhs.size) > (rhs.fee * lhs.size),
-         * which is a little quicker to execute. Since the result is a 128
-         * bit multiplication, we store the result in two uint64's. */
-        uint64_t lhs_hi, lhs_lo = mul128(left.getTransactionFee(), right.getTransactionBinaryArray().size(), &lhs_hi);
-        uint64_t rhs_hi, rhs_lo = mul128(right.getTransactionFee(), left.getTransactionBinaryArray().size(), &rhs_hi);
-
-        /* If the left hand side high bits are greater than the right hand
-         * side high bits, or the high bits are equal and the left hand side
-         * low bits are equal, then the lhs is larger. */
-        const bool rightHandSideMoreProfitable
-            = lhs_hi > rhs_hi || (lhs_hi == rhs_hi && lhs_lo > rhs_lo);
-
-        const bool leftHandSideMoreProfitable
-            = rhs_hi > lhs_hi || (lhs_hi == rhs_hi && rhs_lo > lhs_lo);
-
-        /* First sort by profitability, fee per byte, higher fee per byte preferred */
-        if (rightHandSideMoreProfitable)
-        {
-            return true;
-        }
-        else if (leftHandSideMoreProfitable)
-        {
-            return false;
-        }
-
-        const uint64_t leftAmount = left.getTransactionAmount();
-        const uint64_t rightAmount = right.getTransactionAmount();
-
-        /* Next sort by total amount transferred, larger amounts preferred */
-        if (leftAmount > rightAmount)
-        {
-            return true;
-        }
-        else if (rightAmount > leftAmount)
-        {
-            return false;
-        }
-
-        /* Figure out the ratio of inputs to outputs, ensuring we don't divide
-         * by zero. */
-        const double leftInputOutputRatio = left.getTransaction().outputs.size() == 0
-            ? std::numeric_limits<double>::max()
-            : left.getTransaction().inputs.size() / left.getTransaction().outputs.size();
-
-        const double rightInputOutputRatio = right.getTransaction().outputs.size() == 0
-            ? std::numeric_limits<double>::max()
-            : right.getTransaction().inputs.size() / right.getTransaction().outputs.size();
-
-        /* Next sort by ratio of inputs to outputs, higher ratio preferred
-         * (Less outputs = more 'optimized' transaction). */
-        if (leftInputOutputRatio > rightInputOutputRatio)
-        {
-            return true;
-        }
-        else if (rightInputOutputRatio > leftInputOutputRatio)
-        {
-            return false;
-        }
-
-        const size_t leftSize = left.getTransactionBinaryArray().size();
-        const size_t rightSize = right.getTransactionBinaryArray().size();
-
-        /* Next sort by size of transaction, smaller transactions preferred. */
-        if (leftSize < rightSize)
-        {
-            return true;
-        }
-        else if (rightSize < leftSize)
-        {
-            return false;
-        }
-
-        /* Next, prefer older transactions. receiveTime is a unix timestamp,
-         * so smaller = older. */
-        if (lhs.receiveTime < rhs.receiveTime)
-        {
-            return true;
-        }
-        else if (rhs.receiveTime < lhs.receiveTime)
-        {
-            return false;
-        }
-
-        /* Everything is the same! Return true because we've gotta return
-         * something.. */
-        return true;
+        return TransactionPoolPolicy::hasHigherPriority(
+            left.getTransactionFee(),
+            lhs.receiveTime,
+            left.getTransactionHash(),
+            right.getTransactionFee(),
+            rhs.receiveTime,
+            right.getTransactionHash());
     }
 
     const Crypto::Hash &TransactionPool::PendingTransactionInfo::getTransactionHash() const
@@ -114,7 +34,7 @@ namespace CryptoNote
         return cachedTransaction.getTransactionHash();
     }
 
-    size_t TransactionPool::PaymentIdHasher::operator()(const boost::optional<Crypto::Hash> &paymentId) const
+    size_t TransactionPool::PaymentIdHasher::operator()(const std::optional<Crypto::Hash> &paymentId) const
     {
         if (!paymentId)
         {
@@ -124,10 +44,67 @@ namespace CryptoNote
         return std::hash<Crypto::Hash> {}(*paymentId);
     }
 
+    bool TransactionPool::insertTransaction(PendingTransactionInfo &&transaction)
+    {
+        const Crypto::Hash hash = transaction.getTransactionHash();
+
+        const auto [position, inserted] = m_transactions.emplace(hash, std::move(transaction));
+
+        if (!inserted)
+        {
+            return false;
+        }
+
+        const PendingTransactionInfo *stored = &position->second;
+
+        m_byPriority.insert(stored);
+        m_byPaymentId.emplace(stored->paymentId, stored);
+
+        return true;
+    }
+
+    bool TransactionPool::eraseTransaction(const Crypto::Hash &hash)
+    {
+        const auto position = m_transactions.find(hash);
+
+        if (position == m_transactions.end())
+        {
+            return false;
+        }
+
+        const PendingTransactionInfo *stored = &position->second;
+
+        /* The priority view is ordered by value, so several entries can
+           compare equivalent to this one. Walk that equivalent range and drop
+           the entry that is this exact transaction. */
+        const auto priorityRange = m_byPriority.equal_range(stored);
+
+        for (auto it = priorityRange.first; it != priorityRange.second; ++it)
+        {
+            if (*it == stored)
+            {
+                m_byPriority.erase(it);
+                break;
+            }
+        }
+
+        const auto paymentRange = m_byPaymentId.equal_range(stored->paymentId);
+
+        for (auto it = paymentRange.first; it != paymentRange.second; ++it)
+        {
+            if (it->second == stored)
+            {
+                m_byPaymentId.erase(it);
+                break;
+            }
+        }
+
+        m_transactions.erase(position);
+
+        return true;
+    }
+
     TransactionPool::TransactionPool(std::shared_ptr<Logging::ILogger> logger):
-        transactionHashIndex(transactions.get<TransactionHashTag>()),
-        transactionCostIndex(transactions.get<TransactionCostTag>()),
-        paymentIdIndex(transactions.get<PaymentIdTag>()),
         logger(logger, "TransactionPool")
     {
     }
@@ -144,7 +121,7 @@ namespace CryptoNote
 
         std::scoped_lock lock(m_transactionsMutex);
 
-        if (transactionHashIndex.count(pendingTx.getTransactionHash()) > 0)
+        if (m_transactions.count(pendingTx.getTransactionHash()) > 0)
         {
             logger(Logging::DEBUGGING) << "pushTransaction: transaction hash already present in index";
             return false;
@@ -160,18 +137,18 @@ namespace CryptoNote
 
         logger(Logging::DEBUGGING) << "pushed transaction " << pendingTx.getTransactionHash() << " to pool";
 
-        return transactionHashIndex.insert(std::move(pendingTx)).second;
+        return insertTransaction(std::move(pendingTx));
     }
 
     const std::optional<CachedTransaction> TransactionPool::tryGetTransaction(const Crypto::Hash &hash) const
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        auto it = transactionHashIndex.find(hash);
+        const auto it = m_transactions.find(hash);
 
-        if (it != transactionHashIndex.end())
+        if (it != m_transactions.end())
         {
-            return it->cachedTransaction;
+            return it->second.cachedTransaction;
         }
 
         return std::nullopt;
@@ -181,54 +158,35 @@ namespace CryptoNote
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        auto it = transactionHashIndex.find(hash);
-        assert(it != transactionHashIndex.end());
+        const auto it = m_transactions.find(hash);
+        assert(it != m_transactions.end());
 
-        return it->cachedTransaction;
+        return it->second.cachedTransaction;
     }
 
     bool TransactionPool::removeTransaction(const Crypto::Hash &hash)
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        auto it = transactionHashIndex.find(hash);
-        if (it == transactionHashIndex.end())
+        const auto it = m_transactions.find(hash);
+        if (it == m_transactions.end())
         {
             logger(Logging::DEBUGGING) << "removeTransaction: transaction not found";
             return false;
         }
 
-        excludeFromState(poolState, it->cachedTransaction);
-        transactionHashIndex.erase(it);
+        excludeFromState(poolState, it->second.cachedTransaction);
+        eraseTransaction(hash);
 
         logger(Logging::DEBUGGING) << "transaction " << hash << " removed from pool";
         return true;
-    }
-
-    size_t TransactionPool::getFusionTransactionCount() const
-    {
-        size_t fusionTransactionCount = 0;
-
-        std::scoped_lock lock(m_transactionsMutex);
-
-        for (const auto &transaction : transactionCostIndex)
-        {
-            size_t transactionFee = transaction.cachedTransaction.getTransactionFee();
-
-            if (transactionFee == 0)
-            {
-                fusionTransactionCount++;
-            }
-        }
-
-        return fusionTransactionCount;
     }
 
     size_t TransactionPool::getTransactionCount() const
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        return transactionHashIndex.size();
+        return m_transactions.size();
     }
 
     std::vector<Crypto::Hash> TransactionPool::getTransactionHashes() const
@@ -236,9 +194,9 @@ namespace CryptoNote
         std::scoped_lock lock(m_transactionsMutex);
 
         std::vector<Crypto::Hash> hashes;
-        for (auto it = transactionCostIndex.begin(); it != transactionCostIndex.end(); ++it)
+        for (const PendingTransactionInfo *transaction : m_byPriority)
         {
-            hashes.push_back(it->getTransactionHash());
+            hashes.push_back(transaction->getTransactionHash());
         }
 
         return hashes;
@@ -248,7 +206,7 @@ namespace CryptoNote
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        return transactionHashIndex.find(hash) != transactionHashIndex.end();
+        return m_transactions.find(hash) != m_transactions.end();
     }
 
     const TransactionValidatorState &TransactionPool::getPoolTransactionValidationState() const
@@ -261,11 +219,11 @@ namespace CryptoNote
         std::scoped_lock lock(m_transactionsMutex);
 
         std::vector<CachedTransaction> result;
-        result.reserve(transactionCostIndex.size());
+        result.reserve(m_byPriority.size());
 
-        for (const auto &transactionItem : transactionCostIndex)
+        for (const PendingTransactionInfo *transaction : m_byPriority)
         {
-            result.emplace_back(transactionItem.cachedTransaction);
+            result.emplace_back(transaction->cachedTransaction);
         }
 
         return result;
@@ -280,17 +238,17 @@ namespace CryptoNote
 
         std::scoped_lock lock(m_transactionsMutex);
 
-        for (const auto &transaction : transactionCostIndex)
+        for (const PendingTransactionInfo *transaction : m_byPriority)
         {
-            uint64_t transactionFee = transaction.cachedTransaction.getTransactionFee();
+            uint64_t transactionFee = transaction->cachedTransaction.getTransactionFee();
 
             if (transactionFee != 0)
             {
-                regularTransactions.emplace_back(transaction.cachedTransaction);
+                regularTransactions.emplace_back(transaction->cachedTransaction);
             }
             else
             {
-                fusionTransactions.emplace_back(transaction.cachedTransaction);
+                fusionTransactions.emplace_back(transaction->cachedTransaction);
             }
         }
 
@@ -301,24 +259,24 @@ namespace CryptoNote
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        auto it = transactionHashIndex.find(hash);
-        assert(it != transactionHashIndex.end());
+        const auto it = m_transactions.find(hash);
+        assert(it != m_transactions.end());
 
-        return it->receiveTime;
+        return it->second.receiveTime;
     }
 
     std::vector<Crypto::Hash> TransactionPool::getTransactionHashesByPaymentId(const Crypto::Hash &paymentId) const
     {
         std::scoped_lock lock(m_transactionsMutex);
 
-        boost::optional<Crypto::Hash> p(paymentId);
+        std::optional<Crypto::Hash> p(paymentId);
 
-        auto range = paymentIdIndex.equal_range(p);
+        const auto range = m_byPaymentId.equal_range(p);
         std::vector<Crypto::Hash> transactionHashes;
         transactionHashes.reserve(std::distance(range.first, range.second));
         for (auto it = range.first; it != range.second; ++it)
         {
-            transactionHashes.push_back(it->getTransactionHash());
+            transactionHashes.push_back(it->second->getTransactionHash());
         }
 
         return transactionHashes;

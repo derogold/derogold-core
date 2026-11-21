@@ -30,18 +30,18 @@ namespace CryptoNote
 
         template<typename T> bool get(T &value) const
         {
-            auto it = find(typeid(T));
+            auto it = find<T>();
             if (it == fields.end())
             {
                 return false;
             }
-            value = boost::get<T>(*it);
+            value = std::get<T>(*it);
             return true;
         }
 
         template<typename T> void set(const T &value)
         {
-            auto it = find(typeid(T));
+            auto it = find<T>();
             if (it != fields.end())
             {
                 *it = value;
@@ -76,17 +76,19 @@ namespace CryptoNote
         }
 
       private:
-        std::vector<CryptoNote::TransactionExtraField>::const_iterator find(const std::type_info &t) const
+        /* Selected on the alternative type rather than a std::type_info, since
+           std::variant carries an index rather than runtime type information. */
+        template<typename T> std::vector<CryptoNote::TransactionExtraField>::const_iterator find() const
         {
-            return std::find_if(fields.begin(), fields.end(), [&t](const CryptoNote::TransactionExtraField &f) {
-                return t == f.type();
+            return std::find_if(fields.begin(), fields.end(), [](const CryptoNote::TransactionExtraField &f) {
+                return std::holds_alternative<T>(f);
             });
         }
 
-        std::vector<CryptoNote::TransactionExtraField>::iterator find(const std::type_info &t)
+        template<typename T> std::vector<CryptoNote::TransactionExtraField>::iterator find()
         {
-            return std::find_if(fields.begin(), fields.end(), [&t](const CryptoNote::TransactionExtraField &f) {
-                return t == f.type();
+            return std::find_if(fields.begin(), fields.end(), [](const CryptoNote::TransactionExtraField &f) {
+                return std::holds_alternative<T>(f);
             });
         }
 

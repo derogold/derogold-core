@@ -97,6 +97,10 @@ WalletSynchronizer &WalletSynchronizer::operator=(WalletSynchronizer &&old)
 
     m_threadCount = std::move(old.m_threadCount);
 
+    m_forkCount = old.m_forkCount.load();
+    m_lastForkHeight = old.m_lastForkHeight.load();
+    m_lastForkDepth = old.m_lastForkDepth.load();
+
     return *this;
 }
 
@@ -114,60 +118,66 @@ void WalletSynchronizer::mainLoop()
 {
     auto lastCheckedLockedTransactions = std::chrono::system_clock::now();
 
+    /* Tracks how many blocks have been pushed to m_blockProcessingQueue but
+       not yet committed via completeBlockProcessing. fetchBlocks() does NOT
+       remove blocks from the internal store, so we must guard against pushing
+       the same blocks again on the next iteration. */
+    size_t pendingBlocks = 0;
+
     while (!m_shouldStop)
     {
-        const auto blocks = m_blockDownloader.fetchBlocks(Constants::BLOCK_PROCESSING_CHUNK);
-
-        if (!blocks.empty())
+        /* Only fetch a new batch when the previous one is fully committed.
+           The downloader prefetches into its own buffer independently, so
+           the next batch is usually ready immediately. */
+        if (pendingBlocks == 0)
         {
-            m_blockProcessingQueue.push_back_n(blocks.begin(), blocks.end());
+            const auto blocks = m_blockDownloader.fetchBlocks(Constants::BLOCK_PROCESSING_CHUNK);
 
-            /* Tell the child threads to wake up */
-            m_haveBlocksToProcess.notify_all();
-
-            const size_t chunkSize = blocks.size();
-
+            if (!blocks.empty())
             {
-                /* *possibly* should use another mutex here for the different
-                    condition variable? I think it's fine since we're only
-                    stopping the child threads from aquiring the mutex for
-                    a very short time (since the check will fail when not all
-                    blocks are available) */
-                std::unique_lock<std::mutex> lock(m_mutex);
-
-                m_haveProcessedBlocksToHandle.wait(lock, [&] {
-                    if (m_shouldStop)
-                    {
-                        return true;
-                    }
-
-                    /* Wait until all the blocks have been added to the queue */
-                    return m_processedBlocks.size() == chunkSize;
-                });
-
-                if (m_shouldStop)
-                {
-                    return;
-                }
-            }
-
-            /* Nothing else should be pushing to the queue here, since the
-               child threads are waiting for a new chunk, so don't need to
-               use mutex to access */
-            while (!m_processedBlocks.empty_unsafe() && !m_shouldStop)
-            {
-                const auto [block, ourInputs, arrivalIndex] = m_processedBlocks.top_unsafe();
-                completeBlockProcessing(block, ourInputs);
-                if (!m_processedBlocks.empty_unsafe() && !m_shouldStop)
-                {
-                    m_processedBlocks.pop_unsafe();
-                }
+                pendingBlocks = blocks.size();
+                m_blockProcessingQueue.push_back_n(blocks.begin(), blocks.end());
+                m_haveBlocksToProcess.notify_all();
             }
         }
 
-        /* If we're synced, check any transactions that may be in the pool */
-        if (getCurrentScanHeight() >= m_daemon->localDaemonBlockCount() && !m_shouldStop)
+        if (pendingBlocks > 0)
         {
+            /* Wait for ALL pending blocks to arrive in m_processedBlocks before
+               draining. dropBlock() calls pop_front() on m_storedBlocks, which
+               assumes blocks are dropped in strict arrival order. Draining only
+               when the full batch is present lets the priority queue re-order any
+               out-of-order worker results before we commit them.
+               Workers call notify_all() immediately after each push, so we wake
+               up as soon as the last one arrives. The 100ms timeout guards against
+               missed notifications. */
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                m_haveProcessedBlocksToHandle.wait_for(lock, std::chrono::milliseconds(100), [&] {
+                    return m_shouldStop || m_processedBlocks.size() >= pendingBlocks;
+                });
+            }
+
+            /* Drain the full batch in arrival order via the priority queue. */
+            if (!m_shouldStop && m_processedBlocks.size() >= pendingBlocks)
+            {
+                while (!m_shouldStop && pendingBlocks > 0)
+                {
+                    const auto [block, ourInputs, arrivalIndex] = m_processedBlocks.top_and_remove();
+
+                    if (m_shouldStop)
+                    {
+                        break;
+                    }
+
+                    completeBlockProcessing(block, ourInputs);
+                    pendingBlocks--;
+                }
+            }
+        }
+        else if (getCurrentScanHeight() >= m_daemon->localDaemonBlockCount())
+        {
+            /* Fully synced — check mempool periodically and sleep. */
             const auto now = std::chrono::system_clock::now();
             const auto timeDiff = now - lastCheckedLockedTransactions;
 
@@ -178,7 +188,17 @@ void WalletSynchronizer::mainLoop()
                 lastCheckedLockedTransactions = now;
             }
 
-            Utilities::sleepUnlessStopping(std::chrono::seconds(5), m_shouldStop);
+            Utilities::sleepUnlessStopping(std::chrono::seconds(1), m_shouldStop);
+        }
+        else
+        {
+            /* Downloader hasn't produced blocks yet — brief pause. */
+            Utilities::sleepUnlessStopping(std::chrono::milliseconds(100), m_shouldStop);
+        }
+
+        if (m_shouldStop)
+        {
+            break;
         }
     }
 }
@@ -208,8 +228,15 @@ void WalletSynchronizer::blockProcessingThread()
         {
             std::unique_lock<std::mutex> lock(m_mutex);
 
-            /* Wait for blocks to be available */
-            m_haveBlocksToProcess.wait(lock, [&] {
+            /* Wait for blocks to be available.
+               This is a timed wait on purpose. Producers push to the queue and
+               call notify without holding this mutex, so a notification that
+               lands between our predicate check and the wait is lost. With an
+               untimed wait that lost wakeup parked the worker forever, and the
+               main loop then spun waiting for a batch that was never processed,
+               stalling sync until the wallet was reopened. Waking periodically
+               costs nothing and makes a missed notification self-correcting. */
+            m_haveBlocksToProcess.wait_for(lock, std::chrono::milliseconds(100), [&] {
                 if (m_shouldStop)
                 {
                     return true;
@@ -236,12 +263,29 @@ void WalletSynchronizer::blockProcessingThread()
 
                 auto ourInputs = processBlockOutputs(block);
 
+                /* Skip global index lookups for blocks below the prune floor.
+                   The daemon has deleted the raw transaction data for these
+                   heights, so /get_o_indexes will fail.  The prunedItems from
+                   the daemon still let us detect incoming outputs (balance),
+                   but we cannot resolve global indexes for spending until the
+                   wallet re-syncs against a non-pruned node. */
+                const uint64_t pruneFloor = m_blockDownloader.getPruneFloor();
+                const bool isPrunedBlock = (pruneFloor > 0 && block.blockHeight < pruneFloor);
+
                 std::unordered_map<Crypto::Hash, std::vector<uint64_t>> globalIndexes;
 
                 for (auto &[publicKey, input] : ourInputs)
                 {
                     if (!m_subWallets->isViewWallet() && !input.globalOutputIndex)
                     {
+                        /* Pruned blocks: daemon can't provide global indexes.
+                           Leave as nullopt — getSpendableInputs will filter
+                           these out until re-synced on a non-pruned node. */
+                        if (isPrunedBlock)
+                        {
+                            continue;
+                        }
+
                         if (globalIndexes.empty())
                         {
                             globalIndexes = getGlobalIndexes(block.blockHeight);
@@ -251,29 +295,65 @@ void WalletSynchronizer::blockProcessingThread()
 
                         /* Daemon returns indexes for hashes in a range. If we don't
                            find our hash, either the chain has forked, or the daemon
-                           is faulty. Print a warning message, then return so we
-                           can fetch new blocks, in the likely case the daemon has
-                           forked.
+                           is faulty.
 
                            Also need to check there are enough indexes for the one we want */
-                        while (it == globalIndexes.end() || it->second.size() <= input.transactionIndex)
+                        constexpr size_t MAX_GLOBAL_INDEX_ATTEMPTS = 6;
+
+                        size_t attempts = 0;
+
+                        while ((it == globalIndexes.end() || it->second.size() <= input.transactionIndex)
+                               && attempts < MAX_GLOBAL_INDEX_ATTEMPTS)
                         {
                             if (m_shouldStop)
                             {
                                 return;
                             }
 
+                            attempts++;
+
                             Logger::logger.log(
-                                "Warning: Failed to get correct global indexes from daemon."
-                                "\nThe daemon may have gone offline or the chain may have just forked.",
+                                "Warning: Failed to get correct global indexes from daemon (attempt "
+                                    + std::to_string(attempts) + " of "
+                                    + std::to_string(MAX_GLOBAL_INDEX_ATTEMPTS) + ")."
+                                    "\nThe daemon may have gone offline or the chain may have just forked.",
                                 Logger::FATAL,
                                 {Logger::SYNC, Logger::DAEMON});
 
-                            std::this_thread::sleep_for(std::chrono::seconds(5));
+                            Utilities::sleepUnlessStopping(std::chrono::seconds(5), m_shouldStop);
+
+                            if (m_shouldStop)
+                            {
+                                return;
+                            }
 
                             globalIndexes = getGlobalIndexes(block.blockHeight);
 
                             it = globalIndexes.find(input.parentTransactionHash);
+                        }
+
+                        /* Give up rather than retrying forever. This loop used to
+                           spin until shutdown, which is exactly what happens after
+                           a reorg: our transaction is no longer on the chain, so
+                           the daemon will never return an index for it, and the
+                           batch never completed — sync stopped dead until the
+                           wallet was reopened.
+
+                           Leaving the index unresolved lets the block commit. The
+                           input is then filtered out of spendable inputs, and if
+                           this really was a fork the daemon will resend this height
+                           and the fork path will roll the block back and rescan it. */
+                        if (it == globalIndexes.end() || it->second.size() <= input.transactionIndex)
+                        {
+                            Logger::logger.log(
+                                "Giving up on global indexes for transaction "
+                                    + Common::podToHex(input.parentTransactionHash) + " in block "
+                                    + std::to_string(block.blockHeight)
+                                    + ". This input cannot be spent until the wallet is rescanned.",
+                                Logger::FATAL,
+                                {Logger::SYNC, Logger::DAEMON});
+
+                            continue;
                         }
 
                         input.globalOutputIndex = it->second[input.transactionIndex];
@@ -331,16 +411,91 @@ void WalletSynchronizer::completeBlockProcessing(
 {
     const uint64_t walletHeight = m_blockDownloader.getHeight();
 
+    /* NOTE: there used to be a guard here that skipped any re-sent block below
+       the prune floor instead of resolving it as a fork. It was wrong twice
+       over: it took the fork path away from real reorgs whose replacement
+       blocks fell below the floor, leaving orphaned transactions in the wallet,
+       and its skip branch still dropped the block, which walked the wallet
+       height backwards so the following block was reprocessed and its inputs
+       stored a second time. Re-processing a block the wallet already has is
+       already handled correctly and idempotently by the fork path below. */
+
     /* Chain forked, invalidate previous transactions */
     if (walletHeight >= block.blockHeight && block.blockHeight != 0)
     {
-        Logger::logger.log(
-            "Blockchain forked, resolving... (Old height: " + std::to_string(walletHeight)
-                + ", new height: " + std::to_string(block.blockHeight) + ")",
-            Logger::INFO,
-            {Logger::SYNC});
+        const uint64_t depth = walletHeight - block.blockHeight + 1;
+
+        /* The daemon re-sending a block the wallet already holds, unchanged,
+           is not a reorg. It still goes through the removal below, which is
+           what makes reprocessing it idempotent, but it is not worth warning
+           about and must not be counted as a chain reorganisation - that count
+           exists to tell somebody their confirmed transactions were withdrawn,
+           and here nothing was. */
+        const auto existing = m_blockDownloader.getHashAtHeight(block.blockHeight);
+
+        const bool sameBlock = existing && *existing == block.blockHash;
+
+        if (sameBlock)
+        {
+            Logger::logger.log(
+                "Daemon re-sent block " + std::to_string(block.blockHeight) + ", reprocessing it",
+                Logger::DEBUG,
+                {Logger::SYNC});
+        }
+        else
+        {
+            /* A warning, not information. Every transaction from here up is
+               about to be removed, some of which the wallet has already
+               reported as confirmed, and the depth is the part worth seeing: a
+               block or two is routine, thousands means something is wrong with
+               where the wallet is being told to resume from. */
+            Logger::logger.log(
+                "Blockchain forked, resolving " + std::to_string(depth) + " block"
+                    + (depth == 1 ? "" : "s") + " (old height: " + std::to_string(walletHeight)
+                    + ", new height: " + std::to_string(block.blockHeight) + ")",
+                Logger::WARNING,
+                {Logger::SYNC});
+
+            m_forkCount++;
+            m_lastForkHeight = block.blockHeight;
+            m_lastForkDepth = depth;
+
+            /* A replacement block should attach to the block below it, which
+               is one the wallet keeps. If it says otherwise, the daemon is
+               rebuilding this wallet from a chain it has no part of - worth
+               saying out loud, because the wallet is about to discard
+               confirmed transactions on that say-so.
+
+               Reported rather than refused: the wallet cannot tell a hostile
+               daemon from a legitimately very deep reorg, and refusing to
+               follow would wedge sync in a case where following is correct.
+               Absent means the daemon did not send one, never a mismatch. */
+            if (block.blockPrevHash && block.blockHeight > 0)
+            {
+                const auto parent = m_blockDownloader.getHashAtHeight(block.blockHeight - 1);
+
+                if (parent && !(*parent == *block.blockPrevHash))
+                {
+                    std::stringstream stream;
+
+                    stream << "Block " << block.blockHeight << " does not attach to the chain this wallet holds: "
+                           << "it follows " << *block.blockPrevHash << ", but this wallet has " << *parent
+                           << " at height " << block.blockHeight - 1
+                           << ". The daemon is serving a different chain.";
+
+                    Logger::logger.log(stream.str(), Logger::WARNING, {Logger::SYNC, Logger::DAEMON});
+                }
+            }
+        }
 
         removeForkedTransactions(block.blockHeight);
+
+        /* The blocks the wallet knew from here up are on a branch that no
+           longer exists. Left in place they are offered to the daemon as
+           resume points it cannot find, and they sit in front of the ones it
+           can, so each following request starts further back than it needs
+           to. */
+        m_blockDownloader.forgetBlocksFrom(block.blockHeight);
     }
 
     /* Prune old inputs that are out of our 'confirmation' window */
@@ -766,9 +921,24 @@ uint64_t WalletSynchronizer::getCurrentScanHeight() const
     return m_blockDownloader.getHeight();
 }
 
+std::tuple<uint64_t, uint64_t, uint64_t> WalletSynchronizer::getForkInfo() const
+{
+    return {m_forkCount.load(), m_lastForkHeight.load(), m_lastForkDepth.load()};
+}
+
+uint64_t WalletSynchronizer::getPruneFloor() const
+{
+    return m_blockDownloader.getPruneFloor();
+}
+
 void WalletSynchronizer::swapNode(const std::shared_ptr<Nigel> daemon)
 {
     m_daemon = daemon;
+
+    /* The new node has its own pruning state, so forget what the previous one
+       reported rather than applying its floor to a node that may hold the full
+       chain. */
+    m_blockDownloader.clearPruneFloor();
 }
 
 void WalletSynchronizer::fromJSON(const JSONObject &j)

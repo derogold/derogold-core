@@ -9,8 +9,7 @@
 #include "serialization/CryptoNoteSerialization.h"
 #include "serialization/SerializationOverloads.h"
 
-#include <boost/variant/apply_visitor.hpp>
-#include <boost/variant/static_visitor.hpp>
+#include <variant>
 #include <stdexcept>
 
 namespace CryptoNote
@@ -19,7 +18,7 @@ namespace CryptoNote
 
     namespace
     {
-        struct BinaryVariantTagGetter : boost::static_visitor<uint8_t>
+        struct BinaryVariantTagGetter
         {
             uint8_t operator()(const CryptoNote::BaseInputDetails)
             {
@@ -32,7 +31,7 @@ namespace CryptoNote
             }
         };
 
-        struct VariantSerializer : boost::static_visitor<>
+        struct VariantSerializer
         {
             VariantSerializer(CryptoNote::ISerializer &serializer, const std::string &name): s(serializer), name(name)
             {
@@ -51,7 +50,7 @@ namespace CryptoNote
         void getVariantValue(
             CryptoNote::ISerializer &serializer,
             uint8_t tag,
-            boost::variant<CryptoNote::BaseInputDetails, CryptoNote::KeyInputDetails> &in)
+            std::variant<CryptoNote::BaseInputDetails, CryptoNote::KeyInputDetails> &in)
         {
             switch (static_cast<SerializationTag>(tag))
             {
@@ -113,11 +112,11 @@ namespace CryptoNote
         if (serializer.type() == ISerializer::OUTPUT)
         {
             BinaryVariantTagGetter tagGetter;
-            uint8_t tag = boost::apply_visitor(tagGetter, input);
+            uint8_t tag = std::visit(tagGetter, input);
             serializer.binary(&tag, sizeof(tag), "type");
 
             VariantSerializer visitor(serializer, "data");
-            boost::apply_visitor(visitor, input);
+            std::visit(visitor, input);
         }
         else
         {

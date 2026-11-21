@@ -73,6 +73,18 @@ namespace Utilities
         return stream.str();
     }
 
+    namespace
+    {
+        /* How many blocks a day holds at the block time in force at this
+           height. Both callers used to spell this out inline and get the last
+           branch wrong, dividing by the block time itself rather than by the
+           number of blocks a day of it holds. */
+        uint64_t blocksPerDay(const uint64_t height)
+        {
+            return 24 * 60 * 60 / CryptoNote::parameters::getCurrentDifficultyTarget(height);
+        }
+    } // namespace
+
     ForkStatus get_fork_status(
         const uint64_t height,
         const std::vector<uint64_t> upgrade_heights,
@@ -102,12 +114,14 @@ namespace Utilities
             }
         }
 
-        const float days = (next_fork - height) /
-                (height >= CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT
-                ? 24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V3
-                    : height >= CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT
-                    ? 24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V2
-                    :CryptoNote::parameters::DIFFICULTY_TARGET);
+        /* Nothing ahead of us to fork to. Saying how far away it is would mean
+           subtracting our height from zero. */
+        if (next_fork == 0)
+        {
+            return UpToDate;
+        }
+
+        const float days = static_cast<float>(next_fork - height) / blocksPerDay(height);
 
         /* Next fork in < 30 days away */
         if (days < 30)
@@ -145,22 +159,20 @@ namespace Utilities
             }
         }
 
-	const float days = static_cast<float>(next_fork - height) /
-                (height >= CryptoNote::parameters::DIFFICULTY_TARGET_V3_HEIGHT
-                    ? 24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V3
-                    : height >= CryptoNote::parameters::DIFFICULTY_TARGET_V2_HEIGHT
-                        ? 24 * 60 * 60 / CryptoNote::parameters::DIFFICULTY_TARGET_V2
-                        :CryptoNote::parameters::DIFFICULTY_TARGET);
+        /* Said on its own. This used to fall through to the arithmetic below,
+           where zero minus our height wrapped around, and printed
+           "No Fork Planned" followed by eighteen quintillion days. */
+        if (next_fork == 0)
+        {
+            return "No Fork Planned";
+        }
 
+        const float days = static_cast<float>(next_fork - height) / blocksPerDay(height);
 
         std::stringstream stream;
 
         stream << std::setprecision(2) << std::fixed;
 
-        if (next_fork == 0)
-        {
-            stream << "No Fork Planned";
-        }
         if (height == next_fork)
         {
             stream << "Now!";

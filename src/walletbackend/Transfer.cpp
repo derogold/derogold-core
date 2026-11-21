@@ -20,6 +20,7 @@
 #include <utilities/Utilities.h>
 #include <walletbackend/WalletBackend.h>
 #include <ctime> // time_t
+#include <tuple> // std::tie
 
 namespace SendTransaction
 {
@@ -309,8 +310,25 @@ namespace SendTransaction
            their sum. The sumOfInputs is sometimes (most of the time) greater than
            the amount we want to send, so we need to send some back to ourselves
            as change. */
-        auto [ourInputs, sumOfInputs] = subWallets->getTransactionInputsForAmount(
-            totalAmount, takeFromAllSubWallets, subWalletsToTakeFrom, daemon->networkBlockCount());
+        /* Input selection throws when it cannot cover the amount. That can
+           happen even after validateTransaction passed, because validation
+           compares against the balance while selection only considers inputs
+           that are actually spendable — an input with no global output index,
+           for instance, counts towards the balance but cannot be spent. Turn it
+           into an error the caller can report instead of letting it escape and
+           terminate the wallet. */
+        std::vector<WalletTypes::TxInputAndOwner> ourInputs;
+        uint64_t sumOfInputs = 0;
+
+        try
+        {
+            std::tie(ourInputs, sumOfInputs) = subWallets->getTransactionInputsForAmount(
+                totalAmount, takeFromAllSubWallets, subWalletsToTakeFrom, daemon->networkBlockCount());
+        }
+        catch (const std::invalid_argument &)
+        {
+            return {NOT_ENOUGH_BALANCE, Crypto::Hash()};
+        }
 
         /* If the sum of inputs is > total amount, we need to send some back to
            ourselves. */
@@ -874,7 +892,7 @@ namespace SendTransaction
                post signature generation will invalidate the signatures. */
             const auto [success, signatures] = Crypto::crypto_ops::generateRingSignatures(
                 txPrefixHash,
-                boost::get<CryptoNote::KeyInput>(tx.inputs[i]).keyImage,
+                std::get<CryptoNote::KeyInput>(tx.inputs[i]).keyImage,
                 publicKeys,
                 tmpSecretKeys[i],
                 input.realOutput);
@@ -903,7 +921,7 @@ namespace SendTransaction
 
             if (!Crypto::crypto_ops::checkRingSignature(
                     txPrefixHash,
-                    boost::get<CryptoNote::KeyInput>(tx.inputs[i]).keyImage,
+                    std::get<CryptoNote::KeyInput>(tx.inputs[i]).keyImage,
                     publicKeys,
                     tx.signatures[i]))
             {
@@ -1074,12 +1092,10 @@ namespace SendTransaction
 
         setupTX.unlockTime = unlockTime;
 
-        /* Convert from key inputs to the boost uglyness */
+        /* Convert to the variant types the transaction prefix is built from.
+           These cannot be simplified away: the prefix is hashed as it stands,
+           so its layout is consensus critical. */
         setupTX.inputs = keyInputToTransactionInput(transactionInputs);
-
-        /* We can't really remove boost from here yet and simplify our data types
-           since we take a hash of the transaction prefix. Once we've got this
-           working, maybe we can work some magic. TODO */
         setupTX.outputs = keyOutputToTransactionOutput(result.outputs);
 
         /* Generate the transaction proof of work, this comes before the ring
@@ -1132,7 +1148,7 @@ namespace SendTransaction
 
         for (const auto &input : tx.inputs)
         {
-            inputTotal += boost::get<CryptoNote::KeyInput>(input).amount;
+            inputTotal += std::get<CryptoNote::KeyInput>(input).amount;
         }
 
         for (const auto &output : tx.outputs)

@@ -21,23 +21,8 @@
 #include "version.h"
 
 #include <algorithm>
-#include <boost/foreach.hpp>
-#include <boost/utility/value_init.hpp>
 
 
-// clang-format off
-// see https://github.com/boostorg/random/issues/49
-#if BOOST_VERSION == 106900
-#ifndef BOOST_PENDING_INTEGER_LOG2_HPP
-#define BOOST_PENDING_INTEGER_LOG2_HPP
-#include <boost/integer/integer_log2.hpp>
-#endif /* BOOST_PENDING_INTEGER_LOG2_HPP */
-#endif /* BOOST_VERSION */
-
-#include <boost/uuid/random_generator.hpp>
-// clang-format on
-
-#include <boost/uuid/uuid_io.hpp>
 #include <config/CryptoNoteConfig.h>
 #include <crypto/random.h>
 #include <fstream>
@@ -59,6 +44,18 @@ using namespace CryptoNote;
 
 namespace
 {
+    /* How far down the peer list a connection attempt can reach. Entries are
+       ordered by last_seen, so this is a recency window and not the whole
+       list: at 20, the freshest 21 white peers out of a possible 1000 were the
+       only ones ever dialled. Nothing refreshes last_seen on a peer that has
+       gone away, so the ones that were freshest when the network went quiet
+       keep the newest timestamps and hold the window against everything
+       behind them - the node retries the same 21 dead addresses and never
+       reaches the live peers further down its own list. Matches WrkzCoin. */
+    constexpr size_t PEER_SELECTION_RECENCY_WINDOW = 256;
+
+    constexpr size_t PEER_SELECTION_MAX_TRIES = 16;
+
     size_t get_random_index_with_fixed_probability(size_t max_index)
     {
         // divide by zero workaround
@@ -204,6 +201,16 @@ namespace CryptoNote
                    : std::chrono::duration_cast<std::chrono::milliseconds>(now - writeOperationStartTime).count();
     }
 
+    uint64_t P2pConnectionContext::readIdleDuration(TimePoint now) const
+    { // in milliseconds
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReadTime).count();
+    }
+
+    void P2pConnectionContext::markRead()
+    {
+        lastReadTime = Clock::now();
+    }
+
     void P2pConnectionContext::interrupt()
     {
         logger(DEBUGGING) << *this << "Interrupt connection";
@@ -220,14 +227,14 @@ namespace CryptoNote
         typedef typename Command::response Response;
         int command = Command::ID;
 
-        Request req = boost::value_initialized<Request>();
+        Request req = Request {};
 
         if (!LevinProtocol::decode(reqBuf, req))
         {
             throw std::runtime_error("Failed to load_from_binary in command " + std::to_string(command));
         }
 
-        Response res = boost::value_initialized<Response>();
+        Response res = Response {};
         int ret = handler(command, req, res, ctx);
         resBuf = LevinProtocol::encode(res);
         return ret;
@@ -242,6 +249,8 @@ namespace CryptoNote
         m_payload_handler(payload_handler),
         m_allow_local_ip(false),
         m_hide_my_port(false),
+        m_targetOutgoingConnections(CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT),
+        m_maxIncomingConnections(CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT),
         m_network_id(CryptoNote::CRYPTONOTE_NETWORK),
         logger(std::move(log), "node_server"),
         m_stopEvent(m_dispatcher),
@@ -252,8 +261,18 @@ namespace CryptoNote
         // intervals
         // m_peer_handshake_idle_maker_interval(CryptoNote::P2P_DEFAULT_HANDSHAKE_INTERVAL),
         m_connections_maker_interval(1),
-        m_peerlist_store_interval(60 * 30, false)
+        m_seed_retry_interval(CryptoNote::P2P_SEED_RETRY_INTERVAL_SECONDS),
+        m_gray_housekeeping_interval(CryptoNote::P2P_GRAY_HOUSEKEEPING_INTERVAL_SECONDS),
+        m_peerlist_store_interval(60 * 30, false),
+        m_seedResolveReady(false),
+        m_seed_resolve_in_flight(false),
+        m_seed_resolve_due(0)
     {
+    }
+
+    NodeServer::~NodeServer()
+    {
+        join_seed_resolve_thread();
     }
 
     void NodeServer::serialize(ISerializer &s)
@@ -310,6 +329,22 @@ namespace CryptoNote
 #endif
             default:
             {
+                /* Payload commands are only for peers that have handshaked.
+                   Every one of them was reachable beforehand, so a host that
+                   merely completed a TCP connection could ask this node to read
+                   and serve blocks, hand over the transaction pool, or relay
+                   transactions, without ever identifying itself or proving it
+                   is even on the same network. */
+                if (ctx.m_state == CryptoNoteConnectionContext::state_before_handshake)
+                {
+                    logger(Logging::DEBUGGING)
+                        << ctx << "Payload command " << cmd.command
+                        << " received before handshake, dropping connection";
+                    ctx.m_state = CryptoNoteConnectionContext::state_shutdown;
+                    handled = false;
+                    break;
+                }
+
                 handled = false;
                 ret = m_payload_handler.handleCommand(cmd.isNotify, cmd.command, cmd.buf, out, ctx, handled);
             }
@@ -361,7 +396,7 @@ namespace CryptoNote
 
             // at this moment we have hardcoded config
             m_config.m_net_config.handshake_interval = CryptoNote::P2P_DEFAULT_HANDSHAKE_INTERVAL;
-            m_config.m_net_config.connections_count = CryptoNote::P2P_DEFAULT_CONNECTIONS_COUNT;
+            m_config.m_net_config.connections_count = m_targetOutgoingConnections;
             m_config.m_net_config.packet_max_size = CryptoNote::P2P_DEFAULT_PACKET_MAX_SIZE; // 20 MB limit
             m_config.m_net_config.config_id = 0; // initial config
             m_config.m_net_config.connection_timeout = CryptoNote::P2P_DEFAULT_CONNECTION_TIMEOUT;
@@ -391,7 +426,7 @@ namespace CryptoNote
     void NodeServer::externalRelayNotifyToAll(
         int command,
         const BinaryArray &data_buff,
-        const boost::uuids::uuid *excludeConnection)
+        const Common::Uuid *excludeConnection)
     {
         m_dispatcher.remoteSpawn([this, command, data_buff, excludeConnection] {
             relay_notify_to_all(command, data_buff, excludeConnection);
@@ -402,7 +437,7 @@ namespace CryptoNote
     void NodeServer::externalRelayNotifyToList(
         int command,
         const BinaryArray &data_buff,
-        const std::list<boost::uuids::uuid> relayList)
+        const std::list<Common::Uuid> relayList)
     {
         m_dispatcher.remoteSpawn([this, command, data_buff, relayList] {
             forEachConnection([&](P2pConnectionContext &conn) {
@@ -445,41 +480,164 @@ namespace CryptoNote
         auto priorityNodes = config.getPriorityNodes();
         std::copy(priorityNodes.begin(), priorityNodes.end(), std::back_inserter(m_priority_peers));
 
-        auto seedNodes = config.getSeedNodes();
-        std::copy(seedNodes.begin(), seedNodes.end(), std::back_inserter(m_seed_nodes));
+        /* Left unresolved on purpose: init() and every later lookup turn these
+           into addresses, so a seed hostname is followed if it moves. */
+        m_seed_node_hosts = config.getSeedNodeAddresses();
 
         m_hide_my_port = config.getHideMyPort();
+
+        /* At least one outgoing connection, or the node can never find the
+           network. Zero incoming is a legitimate choice: it makes the node
+           outbound only. */
+        m_targetOutgoingConnections = std::max<uint32_t>(1, config.getOutPeers());
+        m_maxIncomingConnections = config.getInPeers();
+
         return true;
     }
 
-    bool NodeServer::append_net_address(std::vector<NetworkAddress> &nodes, const std::string &addr)
+    void NodeServer::resolve_seed_nodes(const std::vector<std::string> &extraHosts, std::vector<NetworkAddress> &nodes)
     {
-        size_t pos = addr.find_last_of(':');
-        if (!(std::string::npos != pos && addr.length() - 1 != pos && 0 != pos))
+        const auto resolveHost = [&](const std::string &host, uint32_t port) {
+            try
+            {
+                /* Every A record, not one of them at random: a seed behind
+                   round robin DNS is several machines, and we want all of
+                   them, not whichever one this lookup happened to land on. */
+                const auto addresses = System::Ipv4Resolver::resolveAll(host);
+
+                if (addresses.empty())
+                {
+                    logger(WARNING) << "The seed node " << host << " returned no addresses";
+                    return;
+                }
+
+                for (const auto &address : addresses)
+                {
+                    const NetworkAddress na {hostToNetwork(address.getValue()), port};
+
+                    if (std::find(nodes.begin(), nodes.end(), na) == nodes.end())
+                    {
+                        nodes.push_back(na);
+                        logger(TRACE) << "Added seed node: " << na << " (" << host << ")";
+                    }
+                }
+            }
+            catch (const std::exception &e)
+            {
+                logger(WARNING) << "Failed to resolve the seed node " << host << ": " << e.what();
+            }
+        };
+
+        const auto resolveHostAndPort = [&](const std::string &addr) {
+            const size_t pos = addr.find_last_of(':');
+
+            if (pos == std::string::npos || pos == 0 || pos == addr.length() - 1)
+            {
+                logger(ERROR, BRIGHT_RED) << "Failed to parse seed address from string: " << addr;
+                return;
+            }
+
+            try
+            {
+                resolveHost(addr.substr(0, pos), Common::fromString<uint32_t>(addr.substr(pos + 1)));
+            }
+            catch (const std::exception &e)
+            {
+                logger(ERROR, BRIGHT_RED) << "Failed to parse the port of seed address " << addr << ": " << e.what();
+            }
+        };
+
+        for (const auto &seed : CryptoNote::SEED_NODES)
         {
-            logger(ERROR, BRIGHT_RED) << "Failed to parse seed address from string: '" << addr << '\'';
-            return false;
+            resolveHostAndPort(seed);
         }
 
-        std::string host = addr.substr(0, pos);
-
-        try
+        for (const auto &seed : extraHosts)
         {
-            uint32_t port = Common::fromString<uint32_t>(addr.substr(pos + 1));
-
-            System::Ipv4Resolver resolver(m_dispatcher);
-            auto addr = resolver.resolve(host);
-            nodes.push_back(NetworkAddress {hostToNetwork(addr.getValue()), port});
-
-            logger(TRACE) << "Added seed node: " << nodes.back() << " (" << host << ")";
+            resolveHostAndPort(seed);
         }
-        catch (const std::exception &e)
+    }
+
+    //-----------------------------------------------------------------------------------
+
+    void NodeServer::start_seed_resolve()
+    {
+        if (m_seed_resolve_in_flight)
         {
-            logger(ERROR, BRIGHT_YELLOW) << "Failed to resolve host name '" << host << "': " << e.what();
-            return false;
+            return;
         }
 
-        return true;
+        /* The previous lookup has finished; reap it before starting another. */
+        join_seed_resolve_thread();
+
+        m_seed_resolve_in_flight = true;
+        logger(DEBUGGING) << "Looking up the seed node hostnames again";
+
+        m_seedResolveThread = std::thread([this, hosts = m_seed_node_hosts] {
+            std::vector<NetworkAddress> nodes;
+            resolve_seed_nodes(hosts, nodes);
+
+            {
+                std::lock_guard<std::mutex> lock(m_seedResolveMutex);
+                m_seedResolveResult = std::move(nodes);
+                m_seedResolveReady = true;
+            }
+
+            m_seed_resolve_in_flight = false;
+        });
+    }
+
+    //-----------------------------------------------------------------------------------
+
+    void NodeServer::collect_seed_resolve_result()
+    {
+        std::vector<NetworkAddress> nodes;
+
+        {
+            std::lock_guard<std::mutex> lock(m_seedResolveMutex);
+
+            if (!m_seedResolveReady)
+            {
+                return;
+            }
+
+            m_seedResolveReady = false;
+            nodes.swap(m_seedResolveResult);
+        }
+
+        const uint64_t now = static_cast<uint64_t>(time(nullptr));
+
+        if (nodes.empty())
+        {
+            /* Keep the addresses we have: a lookup that fails now may work at
+               the next seed round, and stale addresses beat none at all. */
+            m_seed_resolve_due = now + CryptoNote::P2P_SEED_RETRY_INTERVAL_SECONDS;
+            return;
+        }
+
+        const bool hadNone = m_seed_nodes.empty();
+
+        m_seed_nodes.swap(nodes);
+        m_seed_resolve_due = now + CryptoNote::P2P_SEED_RERESOLVE_INTERVAL_SECONDS;
+
+        logger(INFO) << "Resolved " << m_seed_nodes.size() << " seed node addresses";
+
+        if (hadNone)
+        {
+            /* This is what the seed rounds have been waiting for: dial at the
+               next one instead of sitting out the rest of the interval. */
+            m_seed_retry_interval.reset();
+        }
+    }
+
+    //-----------------------------------------------------------------------------------
+
+    void NodeServer::join_seed_resolve_thread()
+    {
+        if (m_seedResolveThread.joinable())
+        {
+            m_seedResolveThread.join();
+        }
     }
 
 
@@ -487,15 +645,31 @@ namespace CryptoNote
 
     bool NodeServer::init(const NetNodeConfig &config)
     {
-        for (const auto &seed : CryptoNote::SEED_NODES)
-        {
-            append_net_address(m_seed_nodes, seed);
-        }
-
         if (!handleConfig(config))
         {
             logger(ERROR, BRIGHT_RED) << "Failed to handle command line";
             return false;
+        }
+
+        /* Synchronous this once: the node has nowhere to go until it holds at
+           least one address. Every later lookup runs on the helper thread, so
+           a slow or dead DNS server cannot stall the dispatcher. */
+        resolve_seed_nodes(m_seed_node_hosts, m_seed_nodes);
+
+        const uint64_t now = static_cast<uint64_t>(time(nullptr));
+
+        if (!m_seed_nodes.empty())
+        {
+            logger(INFO) << "Resolved " << m_seed_nodes.size() << " seed node addresses";
+            m_seed_resolve_due = now + CryptoNote::P2P_SEED_RERESOLVE_INTERVAL_SECONDS;
+        }
+        else
+        {
+            /* DNS down at boot, most likely, which used to leave the seed list
+               empty for the rest of the process. Look again at the next seed
+               round instead of giving up on the seeds for good. */
+            m_seed_resolve_due = now;
+            logger(WARNING) << "No seed node address could be resolved; will keep trying in the background";
         }
         m_config_folder = config.getConfigFolder();
         m_p2p_state_filename = config.getP2pStateFilename();
@@ -710,7 +884,7 @@ namespace CryptoNote
 
     bool NodeServer::timedSync()
     {
-        COMMAND_TIMED_SYNC::request arg = boost::value_initialized<COMMAND_TIMED_SYNC::request>();
+        COMMAND_TIMED_SYNC::request arg = COMMAND_TIMED_SYNC::request {};
         m_payload_handler.get_payload_sync_data(arg.payload_data);
         auto cmdBuf = LevinProtocol::encode<COMMAND_TIMED_SYNC::request>(arg);
 
@@ -757,7 +931,7 @@ namespace CryptoNote
     void NodeServer::forEachConnection(std::function<void(P2pConnectionContext &)> action)
     {
         // create copy of connection ids because the list can be changed during action
-        std::vector<boost::uuids::uuid> connectionIds;
+        std::vector<Common::Uuid> connectionIds;
         connectionIds.reserve(m_connections.size());
         for (const auto &c : m_connections)
         {
@@ -847,7 +1021,7 @@ namespace CryptoNote
 
             P2pConnectionContext ctx(m_dispatcher, logger.getLogger(), std::move(connection));
 
-            ctx.m_connection_id = boost::uuids::random_generator()();
+            ctx.m_connection_id = Common::randomUuid();
             ctx.m_remote_ip = na.ip;
             ctx.m_remote_port = na.port;
             ctx.m_is_income = false;
@@ -886,7 +1060,7 @@ namespace CryptoNote
                 return true;
             }
 
-            PeerlistEntry pe_local = boost::value_initialized<PeerlistEntry>();
+            PeerlistEntry pe_local = PeerlistEntry {};
             pe_local.adr = na;
             pe_local.id = ctx.peerId;
             pe_local.last_seen = time(nullptr);
@@ -898,7 +1072,7 @@ namespace CryptoNote
             }
 
             auto iter = m_connections.emplace(ctx.m_connection_id, std::move(ctx)).first;
-            const boost::uuids::uuid &connectionId = iter->first;
+            const Common::Uuid &connectionId = iter->first;
             P2pConnectionContext &connectionContext = iter->second;
 
             m_workingContextGroup.spawn(
@@ -922,36 +1096,41 @@ namespace CryptoNote
     //-----------------------------------------------------------------------------------
     bool NodeServer::make_new_connection_from_peerlist(bool use_white_list)
     {
-        size_t local_peers_count =
-            use_white_list ? m_peerlist.get_white_peers_count() : m_peerlist.get_gray_peers_count();
-        if (!local_peers_count)
+        const auto peers_count = [&] {
+            return use_white_list ? m_peerlist.get_white_peers_count() : m_peerlist.get_gray_peers_count();
+        };
+
+        if (peers_count() == 0)
         {
             return false;
         } // no peers
 
-        size_t max_random_index = std::min<uint64_t>(local_peers_count - 1, 20);
+        size_t max_random_index = std::min<uint64_t>(peers_count() - 1, PEER_SELECTION_RECENCY_WINDOW);
 
-        std::set<size_t> tried_peers;
+        /* Addresses rather than indices: a peer that will not answer is taken
+           out of the list below, which shifts every index after it, so a set of
+           indices would start pointing at the wrong peers. */
+        std::set<NetworkAddress> tried_peers;
 
         size_t try_count = 0;
         size_t rand_count = 0;
-        while (rand_count < (max_random_index + 1) * 3 && try_count < 10 && !m_stop)
+        while (rand_count < (max_random_index + 1) * 3 && try_count < PEER_SELECTION_MAX_TRIES && !m_stop)
         {
             ++rand_count;
-            size_t random_index = get_random_index_with_fixed_probability(max_random_index);
-            if (random_index >= local_peers_count)
+
+            const size_t local_peers_count = peers_count();
+
+            if (local_peers_count == 0)
             {
-                logger(ERROR, BRIGHT_RED) << "random_starter_index < peers_local.size() failed!!";
                 return false;
             }
 
-            if (tried_peers.count(random_index))
-            {
-                continue;
-            }
+            /* Re-read every round: the list shrinks as dead peers are dropped. */
+            max_random_index = std::min<uint64_t>(local_peers_count - 1, PEER_SELECTION_RECENCY_WINDOW);
 
-            tried_peers.insert(random_index);
-            PeerlistEntry pe = boost::value_initialized<PeerlistEntry>();
+            const size_t random_index = get_random_index_with_fixed_probability(max_random_index);
+
+            PeerlistEntry pe = PeerlistEntry {};
             bool r = use_white_list ? m_peerlist.get_white_peer_by_index(pe, random_index)
                                     : m_peerlist.get_gray_peer_by_index(pe, random_index);
             if (!(r))
@@ -960,12 +1139,25 @@ namespace CryptoNote
                 return false;
             }
 
-            ++try_count;
+            if (!tried_peers.insert(pe.adr).second)
+            {
+                continue;
+            }
 
             if (is_peer_used(pe))
             {
                 continue;
             }
+
+            /* Passing over an address that just refused us costs nothing, so it
+               does not count as one of the tries. Otherwise a few dead peers at
+               the top of the list use up every attempt, every round. */
+            if (is_addr_recently_failed(pe.adr))
+            {
+                continue;
+            }
+
+            ++try_count;
 
             logger(DEBUGGING) << "Selected peer: " << pe.id << " " << pe.adr << " [white=" << use_white_list
                               << "] last_seen: "
@@ -973,6 +1165,18 @@ namespace CryptoNote
 
             if (!try_to_connect_and_handshake_with_new_peer(pe.adr, false, pe.last_seen, use_white_list))
             {
+                mark_addr_failed(pe.adr);
+
+                /* A white peer earned its place by answering once. Now that it
+                   does not, move it back to gray: the white list is what the
+                   node prefers and what it hands to other nodes, and nothing
+                   else ever takes an entry out of it. */
+                if (use_white_list)
+                {
+                    m_peerlist.remove_from_white(pe.adr);
+                    m_peerlist.append_with_peer_gray(pe);
+                }
+
                 continue;
             }
 
@@ -982,8 +1186,56 @@ namespace CryptoNote
     }
     //-----------------------------------------------------------------------------------
 
+    /* Walk the seed nodes until one of them hands over a peer list. Returns
+       false only when the node is stopping, so the caller can bail out. */
+    bool NodeServer::connect_to_seeds()
+    {
+        if (!m_seed_resolve_in_flight && static_cast<uint64_t>(time(nullptr)) >= m_seed_resolve_due)
+        {
+            start_seed_resolve();
+        }
+
+        if (m_seed_nodes.empty())
+        {
+            logger(DEBUGGING) << "No seed node address is known, nothing to bootstrap from";
+            return true;
+        }
+
+        size_t try_count = 0;
+        size_t current_index = Random::randomValue<size_t>() % m_seed_nodes.size();
+
+        while (!m_stop)
+        {
+            const NetworkAddress seed = m_seed_nodes[current_index];
+
+            /* Already talking to it: that is as good as a fresh handshake, and
+               dialling a second connection to the same seed just wastes one of
+               its slots. */
+            if (is_addr_connected(seed) || try_to_connect_and_handshake_with_new_peer(seed, true))
+            {
+                return true;
+            }
+
+            if (++try_count > m_seed_nodes.size())
+            {
+                logger(ERROR) << "Failed to connect to any of seed peers, continuing without seeds";
+                break;
+            }
+            if (++current_index >= m_seed_nodes.size())
+            {
+                current_index = 0;
+            }
+        }
+
+        return !m_stop;
+    }
+
+    //-----------------------------------------------------------------------------------
+
     bool NodeServer::connections_maker()
     {
+        collect_seed_resolve_result();
+
         connect_to_peerlist(m_exclusive_peers);
 
         if (!m_exclusive_peers.empty())
@@ -991,27 +1243,16 @@ namespace CryptoNote
             return true;
         }
 
-        if (!m_peerlist.get_white_peers_count() && !m_seed_nodes.empty())
+        const size_t start_conn_count = get_outgoing_connections_count();
+
+        /* Nothing known at all: a first start, or --p2p-reset-peerstate. Rate
+           limited like every other seed round, so seeds that are down get one
+           walk per interval instead of one per connection maker tick. */
+        if (!m_peerlist.get_white_peers_count())
         {
-            size_t try_count = 0;
-            size_t current_index = Random::randomValue<size_t>() % m_seed_nodes.size();
-
-            while (true)
+            if (!m_seed_retry_interval.call([this] { return connect_to_seeds(); }))
             {
-                if (try_to_connect_and_handshake_with_new_peer(m_seed_nodes[current_index], true))
-                {
-                    break;
-                }
-
-                if (++try_count > m_seed_nodes.size())
-                {
-                    logger(ERROR) << "Failed to connect to any of seed peers, continuing without seeds";
-                    break;
-                }
-                if (++current_index >= m_seed_nodes.size())
-                {
-                    current_index = 0;
-                }
+                return false;
             }
         }
 
@@ -1049,6 +1290,25 @@ namespace CryptoNote
                     return false;
                 }
             }
+        }
+
+        /* Nobody new could be dialled and we are nearly alone, so every peer we
+           know is stale. Without this the node never asks the seeds again once
+           its white list is non-empty, and a white list is never emptied, so a
+           node that outlives the peers it knows can never find the network
+           again. */
+        const size_t end_conn_count = get_outgoing_connections_count();
+        const size_t seed_retry_floor =
+            std::min<size_t>(m_config.m_net_config.connections_count, CryptoNote::P2P_SEED_RETRY_OUT_PEERS_FLOOR);
+
+        if (end_conn_count <= start_conn_count && end_conn_count < seed_retry_floor)
+        {
+            m_seed_retry_interval.call([this, end_conn_count] {
+                logger(INFO) << "Only " << end_conn_count << " outgoing connection(s) and no new peer reachable"
+                             << " (known peers: white " << m_peerlist.get_white_peers_count() << ", gray "
+                             << m_peerlist.get_gray_peers_count() << "); asking the seed nodes for a fresh peer list";
+                return connect_to_seeds();
+            });
         }
 
         return true;
@@ -1090,17 +1350,112 @@ namespace CryptoNote
     }
 
     //-----------------------------------------------------------------------------------
+    size_t NodeServer::get_incoming_connections_count()
+    {
+        size_t count = 0;
+        for (const auto &cntxt : m_connections)
+        {
+            if (cntxt.second.m_is_income)
+            {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    //-----------------------------------------------------------------------------------
     bool NodeServer::idle_worker()
     {
         try
         {
             m_connections_maker_interval.call([this] { return connections_maker(); });
+            m_gray_housekeeping_interval.call([this] { return gray_peerlist_housekeeping(); });
             m_peerlist_store_interval.call([this] { return store_config(); });
         }
         catch (std::exception &e)
         {
             logger(DEBUGGING) << "exception in idle_worker: " << e.what();
         }
+        return true;
+    }
+
+    //-----------------------------------------------------------------------------------
+    bool NodeServer::is_addr_recently_failed(const NetworkAddress &addr)
+    {
+        const auto it = m_recentlyFailedPeers.find(addr);
+
+        if (it == m_recentlyFailedPeers.end())
+        {
+            return false;
+        }
+
+        if (time(nullptr) - it->second >= static_cast<time_t>(CryptoNote::P2P_FAILED_PEER_FORGET_SECONDS))
+        {
+            m_recentlyFailedPeers.erase(it);
+            return false;
+        }
+
+        return true;
+    }
+
+    void NodeServer::mark_addr_failed(const NetworkAddress &addr)
+    {
+        const time_t now = time(nullptr);
+        m_recentlyFailedPeers[addr] = now;
+
+        /* Entries expire lazily on lookup, so sweep once the map outgrows the
+           gray list to keep address churn from growing it without bound. */
+        if (m_recentlyFailedPeers.size() > CryptoNote::P2P_LOCAL_GRAY_PEERLIST_LIMIT)
+        {
+            for (auto it = m_recentlyFailedPeers.begin(); it != m_recentlyFailedPeers.end();)
+            {
+                it = now - it->second >= static_cast<time_t>(CryptoNote::P2P_FAILED_PEER_FORGET_SECONDS)
+                    ? m_recentlyFailedPeers.erase(it)
+                    : std::next(it);
+            }
+        }
+    }
+
+    //-----------------------------------------------------------------------------------
+    /* Once per interval, dial one random gray peer, take its peer list and
+       close. Reachable peers move to the white list, dead ones leave the gray
+       list, so the addresses nodes keep relaying to each other get verified
+       instead of circulating forever. The connection maker already does this
+       for the peers it dials to fill its slots; this covers the rest. */
+    bool NodeServer::gray_peerlist_housekeeping()
+    {
+        if (!m_exclusive_peers.empty())
+        {
+            return true;
+        }
+
+        const size_t count = m_peerlist.get_gray_peers_count();
+
+        if (count == 0)
+        {
+            return true;
+        }
+
+        PeerlistEntry pe = PeerlistEntry {};
+
+        if (!m_peerlist.get_gray_peer_by_index(pe, Random::randomValue<size_t>() % count) || is_peer_used(pe)
+            || is_addr_recently_failed(pe.adr))
+        {
+            return true;
+        }
+
+        if (try_to_connect_and_handshake_with_new_peer(pe.adr, true, pe.last_seen, false))
+        {
+            m_peerlist.set_peer_just_seen(pe.id, pe.adr);
+            logger(DEBUGGING) << "Gray peer " << pe.adr << " answered, moved to the white list";
+        }
+        else
+        {
+            m_peerlist.remove_from_gray(pe.adr);
+            mark_addr_failed(pe.adr);
+            logger(DEBUGGING) << "Gray peer " << pe.adr << " did not answer, dropped";
+        }
+
         return true;
     }
 
@@ -1112,7 +1467,7 @@ namespace CryptoNote
         time(&now);
         delta = now - local_time;
 
-        BOOST_FOREACH (PeerlistEntry &be, local_peerlist)
+        for (PeerlistEntry &be : local_peerlist)
         {
             if (be.last_seen > uint64_t(local_time))
             {
@@ -1270,10 +1625,10 @@ namespace CryptoNote
     void NodeServer::relay_notify_to_all(
         int command,
         const BinaryArray &data_buff,
-        const boost::uuids::uuid *excludeConnection)
+        const Common::Uuid *excludeConnection)
     {
-        boost::uuids::uuid excludeId =
-            excludeConnection ? *excludeConnection : boost::value_initialized<boost::uuids::uuid>();
+        Common::Uuid excludeId =
+            excludeConnection ? *excludeConnection : Common::Uuid {};
 
         forEachConnection([&](P2pConnectionContext &conn) {
             if (conn.peerId && conn.m_connection_id != excludeId
@@ -1543,7 +1898,18 @@ namespace CryptoNote
             try
             {
                 P2pConnectionContext ctx(m_dispatcher, logger.getLogger(), m_listener.accept());
-                ctx.m_connection_id = boost::uuids::random_generator()();
+
+                /* Past --in-peers, let the connection fall out of scope, which
+                   closes it. Checked after accept() because the limit is on
+                   connections we keep, not on the listen backlog. */
+                if (get_incoming_connections_count() >= m_maxIncomingConnections)
+                {
+                    logger(DEBUGGING) << "Refused an incoming connection: already at the in-peers limit ("
+                                      << m_maxIncomingConnections << ")";
+                    continue;
+                }
+
+                ctx.m_connection_id = Common::randomUuid();
                 ctx.m_is_income = true;
                 ctx.m_started = time(nullptr);
 
@@ -1552,7 +1918,7 @@ namespace CryptoNote
                 ctx.m_remote_port = addressAndPort.second;
 
                 auto iter = m_connections.emplace(ctx.m_connection_id, std::move(ctx)).first;
-                const boost::uuids::uuid &connectionId = iter->first;
+                const Common::Uuid &connectionId = iter->first;
                 P2pConnectionContext &connection = iter->second;
 
                 m_workingContextGroup.spawn(
@@ -1606,12 +1972,31 @@ namespace CryptoNote
                 m_timeoutTimer.sleep(std::chrono::seconds(10));
                 auto now = P2pConnectionContext::Clock::now();
 
+                /* A peer that accepts a request and never answers holds one of
+                   the few outgoing slots indefinitely. Only writes were timed,
+                   and no timed sync is sent to a peer in the synchronizing
+                   state, so nothing ever noticed. Twelve such peers stopped the
+                   node making any new outgoing connections at all.
+
+                   The threshold is deliberately generous: a healthy peer
+                   answers object and chain requests within seconds, so silence
+                   for this long means the exchange is dead. */
+                constexpr uint64_t SYNC_READ_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
                 for (auto &kv : m_connections)
                 {
                     auto &ctx = kv.second;
                     if (ctx.writeDuration(now) > P2P_DEFAULT_INVOKE_TIMEOUT)
                     {
                         logger(DEBUGGING) << ctx << "write operation timed out, stopping connection";
+                        safeInterrupt(ctx);
+                        continue;
+                    }
+
+                    if (ctx.m_state == CryptoNoteConnectionContext::state_synchronizing
+                        && ctx.readIdleDuration(now) > SYNC_READ_IDLE_TIMEOUT_MS)
+                    {
+                        logger(DEBUGGING) << ctx << "stopped responding while synchronizing, stopping connection";
                         safeInterrupt(ctx);
                     }
                 }
@@ -1653,7 +2038,7 @@ namespace CryptoNote
         logger(DEBUGGING) << "timedSyncLoop finished";
     }
 
-    void NodeServer::connectionHandler(const boost::uuids::uuid &connectionId, P2pConnectionContext &ctx)
+    void NodeServer::connectionHandler(const Common::Uuid &connectionId, P2pConnectionContext &ctx)
     {
         // This inner context is necessary in order to stop connection handler at any moment
         System::Context<> context(m_dispatcher, [this, &connectionId, &ctx] {
@@ -1679,10 +2064,22 @@ namespace CryptoNote
                         m_payload_handler.requestMissingPoolTransactions(ctx);
                     }
 
-                    if (!proto.readCommand(cmd))
+                    /* Until the peer has handshaked, cap what it can make us
+                       allocate. The buffer is sized straight from the length in
+                       the packet header, so without this any host that can
+                       complete a TCP connection could claim a 100MB body and
+                       have us reserve it before a single byte is validated. */
+                    const uint64_t maxPacketSize =
+                        ctx.m_state == CryptoNoteConnectionContext::state_before_handshake
+                            ? LEVIN_PRE_HANDSHAKE_MAX_PACKET_SIZE
+                            : LEVIN_DEFAULT_MAX_PACKET_SIZE;
+
+                    if (!proto.readCommand(cmd, maxPacketSize))
                     {
                         break;
                     }
+
+                    ctx.markRead();
 
                     BinaryArray response;
                     bool handled = false;

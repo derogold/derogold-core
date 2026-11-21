@@ -16,7 +16,6 @@
 #include "rpc/JsonRpc.h"
 
 #include <atomic>
-#include <boost/utility/value_init.hpp>
 #include <cryptonotecore/TransactionApi.h>
 #include <http/HttpRequest.h>
 #include <http/HttpResponse.h>
@@ -31,7 +30,7 @@
 #include <version.h>
 
 #ifndef AUTO_VAL_INIT
-#define AUTO_VAL_INIT(n) boost::value_initialized<decltype(n)>()
+#define AUTO_VAL_INIT(n) decltype(n) {}
 #endif
 
 using namespace Crypto;

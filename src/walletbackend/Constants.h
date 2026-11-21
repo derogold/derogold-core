@@ -34,12 +34,29 @@ namespace Constants
        upgrade the wallet format in the future) */
     const uint16_t WALLET_FILE_FORMAT_VERSION = 0;
 
-    /* How large should the m_lastKnownBlockHashes container be */
+    /* How many of the blocks waiting to be processed the downloader names when
+       it asks for more. */
     const size_t LAST_KNOWN_BLOCK_HASHES_SIZE = 50;
+
+    /* How many processed block hashes the wallet keeps, to resume from after a
+       reorg. Held densely - one per block - and thinned only on the way out,
+       so depth costs storage rather than request size. */
+    const size_t RECENT_BLOCK_HASHES_SIZE = 200;
+
+    /* The first this many of them go into the locator one after another. A
+       reorg is nearly always shallow, so the exact resume point is worth
+       naming precisely near the tip. */
+    const size_t LOCATOR_DENSE_COUNT = 10;
 
     /* Save a block hash checkpoint every BLOCK_HASH_CHECKPOINTS_INTERVAL
        blocks */
     const uint32_t BLOCK_HASH_CHECKPOINTS_INTERVAL = 5000;
+
+    /* And keep at most this many of them. At the interval above that is half a
+       million blocks of reach, far past any reorg that could really happen,
+       and it stops a list that grew by one entry per 5000 blocks forever from
+       being shipped in full on every sync request. */
+    const size_t BLOCK_HASH_CHECKPOINTS_MAX = 100;
 
     /* The amount of blocks since an input has been spent that we remove it
        from the container */

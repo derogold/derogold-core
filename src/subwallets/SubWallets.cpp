@@ -693,6 +693,42 @@ std::tuple<uint64_t, uint64_t> SubWallets::getBalance(
     return {unlockedBalance, lockedBalance};
 }
 
+/* The balance we can actually build a transaction from. The unlocked balance
+   includes inputs that input selection will never pick - inputs below
+   INPUT_NOT_SENDING, and inputs with no global output index - so it overstates
+   what is available to send, and a send of the full unlocked balance fails
+   with NOT_ENOUGH_BALANCE. Sweeping needs the real figure. */
+uint64_t SubWallets::getSpendableBalance(
+    std::vector<Crypto::PublicKey> subWalletsToTakeFrom,
+    const bool takeFromAll,
+    const uint64_t currentHeight) const
+{
+    std::scoped_lock lock(m_mutex);
+
+    /* If we're able to take from every subwallet, set the wallets to take from
+       to all our public spend keys */
+    if (takeFromAll)
+    {
+        subWalletsToTakeFrom = m_publicSpendKeys;
+    }
+
+    uint64_t spendableBalance = 0;
+
+    for (const auto &pubKey : subWalletsToTakeFrom)
+    {
+        /* Mirrors the filtering done by getTransactionInputsForAmount() */
+        for (const auto &input : m_subWallets.at(pubKey).getSpendableInputs(currentHeight))
+        {
+            if (input.input.amount >= CryptoNote::parameters::INPUT_NOT_SENDING)
+            {
+                spendableBalance += input.input.amount;
+            }
+        }
+    }
+
+    return spendableBalance;
+}
+
 /* Mark a key image as spent, no longer can be used in transactions */
 void SubWallets::markInputAsSpent(
     const Crypto::KeyImage keyImage,
@@ -869,6 +905,12 @@ Crypto::SecretKey SubWallets::getPrimaryPrivateSpendKey() const
 
 std::vector<WalletTypes::Transaction> SubWallets::getTransactions() const
 {
+    /* Copy under the lock. The sync thread appends to and erases from this
+       vector while the UI thread reads it, and during a foreground sync the UI
+       reads it every couple of seconds, so an unguarded copy can walk a buffer
+       that a concurrent reallocation has already freed. */
+    std::scoped_lock lock(m_mutex);
+
     return m_transactions;
 }
 
@@ -877,6 +919,9 @@ std::vector<WalletTypes::Transaction> SubWallets::getTransactions() const
    block yet. */
 std::vector<WalletTypes::Transaction> SubWallets::getUnconfirmedTransactions() const
 {
+    /* Copy under the lock — the sync thread mutates this list too. */
+    std::scoped_lock lock(m_mutex);
+
     return m_lockedTransactions;
 }
 
@@ -935,6 +980,10 @@ void SubWallets::convertSyncTimestampToHeight(const uint64_t timestamp, const ui
 
 std::vector<std::tuple<std::string, uint64_t, uint64_t>> SubWallets::getBalances(const uint64_t currentHeight) const
 {
+    /* Read the subwallet map under the lock; the sync thread inserts into it
+       and mutates the balances it holds. */
+    std::scoped_lock lock(m_mutex);
+
     std::vector<std::tuple<std::string, uint64_t, uint64_t>> balances;
 
     for (const auto &[pubKey, subWallet] : m_subWallets)
