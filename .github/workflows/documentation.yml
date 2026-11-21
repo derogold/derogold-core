@@ -1,0 +1,38 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - master
+      - development
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - "scripts/check_markdown.py"
+      - ".github/workflows/documentation.yml"
+  pull_request:
+    branches:
+      - master
+      - development
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - "scripts/check_markdown.py"
+      - ".github/workflows/documentation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check Markdown
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check documentation
+        run: python3 scripts/check_markdown.py

@@ -6,6 +6,10 @@ on:
       - 'v*.*.*.*'
     branches:
       - master
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
 
 permissions:
   contents: read
