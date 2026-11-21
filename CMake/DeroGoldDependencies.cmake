@@ -73,6 +73,14 @@ function(derogold_add_cryptopp)
 
     add_library(cryptopp::cryptopp ALIAS cryptopp-static)
 
+    # Crypto++ uses Windows CNG for its OS random-number generator. MSVC
+    # supplies this through a pragma, but MinGW ignores that directive and
+    # needs bcrypt on the target's transitive link interface. Crypto++'s own
+    # CMake file uses the plain target_link_libraries signature.
+    if(WIN32)
+        target_link_libraries(cryptopp-static bcrypt)
+    endif()
+
     # DeroGold includes <cryptopp/sha.h>, so the headers have to be reachable
     # under a cryptopp/ prefix. They sit flat in the source tree, so mirror
     # them into the build tree once and expose that.
