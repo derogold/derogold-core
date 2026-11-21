@@ -34,12 +34,6 @@
 namespace
 {
     namespace fs = std::filesystem;
-    constexpr uint64_t AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS = 60;
-    constexpr uint64_t AUTO_COMPACTION_CHECK_INTERVAL_SLOW_SECONDS = 30 * 60;
-    constexpr uint64_t AUTO_COMPACTION_NEAR_SYNC_LAG_BLOCKS = 2;
-    constexpr uint64_t AUTO_COMPACTION_RESYNC_LAG_BLOCKS = 20;
-    constexpr uint32_t AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED = 3;
-    constexpr uint64_t AUTO_COMPACTION_MIN_GAP_BLOCKS = 10080;
 
     std::string format_epoch(uint64_t epochSeconds)
     {
@@ -198,26 +192,16 @@ DaemonCommandsHandler::DaemonCommandsHandler(
         "Show daemon status"
     );
 
-    m_compactDbSchedulerCheckIntervalSeconds.store(AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS);
-    m_stopCompactDbScheduler = false;
-    m_compactDbSchedulerThread = std::thread([this] { compact_db_scheduler_loop(); });
 }
 
 DaemonCommandsHandler::~DaemonCommandsHandler()
 {
-    m_stopCompactDbScheduler = true;
-
-    // Cancel any running compaction before joining the scheduler thread.
-    // Without this, ~m_compactDbTask() would block indefinitely waiting for
-    // CompactRange to finish, stalling the shutdown sequence.
+    // Cancel any manually-started full-range compaction before the future is
+    // destroyed. RocksDB's normal incremental background compaction is owned
+    // by the database and is unaffected by this maintenance command.
     if (m_database)
     {
         m_database->cancelOptimize();
-    }
-
-    if (m_compactDbSchedulerThread.joinable())
-    {
-        m_compactDbSchedulerThread.join();
     }
 }
 
@@ -772,10 +756,8 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
         out() << InformationMsg("Last finish: ") << SuccessMsg(format_epoch(m_compactDbFinishedAtEpoch))
                   << InformationMsg(", height ") << SuccessMsg(std::to_string(m_compactDbFinishedAtHeight))
                   << std::endl;
-        out() << InformationMsg("Auto scheduler: ")
-                  << SuccessMsg(
-                         "enabled, interval "
-                         + std::to_string(m_compactDbSchedulerCheckIntervalSeconds.load()) + "s")
+        out() << InformationMsg("Automatic full-range compaction: ")
+                  << SuccessMsg("disabled; use compact_db start for deliberate maintenance")
                   << std::endl;
         return true;
     }
@@ -854,7 +836,6 @@ bool DaemonCommandsHandler::compact_db(const std::vector<std::string> &args)
         if (m_database->cancelOptimize())
         {
             out() << InformationMsg("Stop requested for DB compaction.") << std::endl;
-            m_compactDbNearSyncStreak = 0;
             m_compactDbFinishedAtHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
         }
         else
@@ -929,74 +910,6 @@ bool DaemonCommandsHandler::start_compaction_locked(const std::string &reason)
                                      m_database->optimize();
                                  });
     return true;
-}
-
-void DaemonCommandsHandler::compact_db_scheduler_loop()
-{
-    while (!m_stopCompactDbScheduler)
-    {
-        const uint64_t sleepSeconds = m_compactDbSchedulerCheckIntervalSeconds.load();
-        for (uint64_t i = 0; i < sleepSeconds && !m_stopCompactDbScheduler; ++i)
-        {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
-        if (m_stopCompactDbScheduler)
-        {
-            return;
-        }
-
-        std::lock_guard<std::mutex> lock(m_compactDbMutex);
-        refresh_compaction_state_locked();
-
-        const uint64_t localHeight = static_cast<uint64_t>(m_core.getTopBlockIndex()) + 1;
-        const uint64_t networkHeight = std::max<uint64_t>(1, m_syncManager->getBlockchainHeight());
-        const uint64_t lag = networkHeight > localHeight ? networkHeight - localHeight : 0;
-
-        if (lag <= AUTO_COMPACTION_NEAR_SYNC_LAG_BLOCKS)
-        {
-            m_compactDbNearSyncStreak += 1;
-        }
-        else if (lag >= AUTO_COMPACTION_RESYNC_LAG_BLOCKS)
-        {
-            m_compactDbNearSyncStreak = 0;
-        }
-
-        const uint64_t desiredInterval =
-            m_compactDbNearSyncStreak >= AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED
-                ? AUTO_COMPACTION_CHECK_INTERVAL_SLOW_SECONDS
-                : AUTO_COMPACTION_CHECK_INTERVAL_FAST_SECONDS;
-
-        if (desiredInterval != m_compactDbSchedulerCheckIntervalSeconds.load())
-        {
-            m_compactDbSchedulerCheckIntervalSeconds.store(desiredInterval);
-            logger(Logging::INFO)
-                << "Adaptive compact_db scheduler interval switched to "
-                << m_compactDbSchedulerCheckIntervalSeconds.load() << "s (lag " << lag << ").";
-        }
-
-        if (m_compactDbRunning)
-        {
-            continue;
-        }
-
-        if (m_compactDbNearSyncStreak < AUTO_COMPACTION_NEAR_SYNC_STREAK_REQUIRED)
-        {
-            continue;
-        }
-
-        const uint64_t lastActivityHeight = std::max(m_compactDbStartedAtHeight, m_compactDbFinishedAtHeight);
-        if (lastActivityHeight != 0 && localHeight > lastActivityHeight
-            && (localHeight - lastActivityHeight) < AUTO_COMPACTION_MIN_GAP_BLOCKS)
-        {
-            continue;
-        }
-
-        if (start_compaction_locked("automatic scheduler"))
-        {
-            logger(Logging::INFO) << "Automatic periodic DB compaction started in background.";
-        }
-    }
 }
 
 bool DaemonCommandsHandler::db_status(const std::vector<std::string> &args)

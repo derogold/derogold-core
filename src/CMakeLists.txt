@@ -14,9 +14,9 @@ file(GLOB_RECURSE Crypto CONFIGURE_DEPENDS crypto/*)
 file(GLOB_RECURSE CryptoNoteCore CONFIGURE_DEPENDS cryptonotecore/* CryptoNoteConfig.h)
 file(GLOB_RECURSE CryptoNoteProtocol CONFIGURE_DEPENDS cryptonoteprotocol/*)
 file(GLOB_RECURSE CryptoTest CONFIGURE_DEPENDS cryptotest/*)
+file(GLOB_RECURSE ReleaseTest CONFIGURE_DEPENDS releasetest/*)
 file(GLOB_RECURSE Errors CONFIGURE_DEPENDS errors/*)
 file(GLOB_RECURSE Http CONFIGURE_DEPENDS http/*)
-file(GLOB_RECURSE JsonRpcServer CONFIGURE_DEPENDS jsonrpcserver/*)
 file(GLOB_RECURSE Logging CONFIGURE_DEPENDS logging/*)
 file(GLOB_RECURSE Logger CONFIGURE_DEPENDS logger/*)
 file(GLOB_RECURSE miner CONFIGURE_DEPENDS miner/*)
@@ -34,8 +34,6 @@ file(GLOB_RECURSE Utilities CONFIGURE_DEPENDS utilities/*)
 file(GLOB_RECURSE Wallet CONFIGURE_DEPENDS wallet/*)
 file(GLOB_RECURSE WalletApi CONFIGURE_DEPENDS walletapi/*)
 file(GLOB_RECURSE WalletBackend CONFIGURE_DEPENDS walletbackend/*)
-file(GLOB_RECURSE WalletService CONFIGURE_DEPENDS walletservice/*)
-file(GLOB_RECURSE WalletUpgrader CONFIGURE_DEPENDS walletupgrader/*)
 file(GLOB_RECURSE zedwallet++ CONFIGURE_DEPENDS zedwallet++/*)
 
 if(WIN32)
@@ -47,7 +45,7 @@ else()
 endif()
 
 # Group the files together in IDEs
-source_group("" FILES ${Common} ${Config} ${Crypto} ${CryptoNoteCore} ${CryptoNoteProtocol} ${DeroGoldd} ${JsonRpcServer} ${Http} ${Logging} ${Logger} ${miner} ${Mnemonics} ${Nigel} ${NodeRpcProxy} ${P2p} ${Rpc} ${Serialization} ${Snapshot} ${System} ${Transfers} ${Wallet} ${WalletApi} ${WalletBackend} ${WalletService} ${zedwallet++} ${CryptoTest} ${Errors} ${Utilities} ${WalletUpgrader} ${SubWallets})
+source_group("" FILES ${Common} ${Config} ${Crypto} ${CryptoNoteCore} ${CryptoNoteProtocol} ${DeroGoldd} ${Http} ${Logging} ${Logger} ${miner} ${Mnemonics} ${Nigel} ${NodeRpcProxy} ${P2p} ${Rpc} ${Serialization} ${Snapshot} ${System} ${Transfers} ${Wallet} ${WalletApi} ${WalletBackend} ${zedwallet++} ${CryptoTest} ${ReleaseTest} ${Errors} ${Utilities} ${SubWallets})
 
 # Define a group of files as a library to link against
 add_library(Common STATIC ${Common})
@@ -56,7 +54,6 @@ add_library(Crypto STATIC ${Crypto})
 add_library(CryptoNoteCore STATIC ${CryptoNoteCore})
 add_library(Errors STATIC ${Errors})
 add_library(Http STATIC ${Http})
-add_library(JsonRpcServer STATIC ${JsonRpcServer})
 add_library(Logging STATIC ${Logging})
 add_library(Logger STATIC ${Logger})
 add_library(Mnemonics STATIC ${Mnemonics})
@@ -81,29 +78,24 @@ endif()
 if(MSVC OR MINGW)
     set(CT_SOURCES_OS binaryinfo/cryptotest.rc)
     set(MINER_SOURCES_OS binaryinfo/miner.rc)
-    set(PG_SOURCES_OS binaryinfo/service.rc)
     set(DAEMON_SOURCES_OS binaryinfo/daemon.rc)
     set(WALLET_API_SOURCES_OS binaryinfo/walletapi.rc)
-    set(WALLET_UPGRADER_SOURCES_OS binaryinfo/walletupgrader.rc)
     set(ZED_WALLET_SOURCES_OS binaryinfo/zedwallet.rc)
 endif()
 
 add_executable(cryptotest ${CryptoTest} ${CT_SOURCES_OS})
+add_executable(releasetest ${ReleaseTest})
 add_executable(miner ${miner} ${MINER_SOURCES_OS})
-add_executable(WalletService ${WalletService} ${PG_SOURCES_OS})
 add_executable(DeroGoldd ${DeroGoldd} ${DAEMON_SOURCES_OS})
 add_executable(WalletApi ${WalletApi} ${WALLET_API_SOURCES_OS})
-add_executable(WalletUpgrader ${WalletUpgrader} ${WALLET_UPGRADER_SOURCES_OS})
 add_executable(zedwallet++ ${zedwallet++} ${ZED_WALLET_SOURCES_OS})
 
 if(MSVC OR MINGW)
     target_link_libraries(System ws2_32)
     target_link_libraries(DeroGoldd Rpcrt4 ws2_32 advapi32 crypt32 gdi32 user32)
-    target_link_libraries(WalletService Rpcrt4 ws2_32 advapi32 crypt32 gdi32 user32)
     target_link_libraries(zedwallet++ ws2_32 advapi32 crypt32 gdi32 user32)
     target_link_libraries(WalletApi ws2_32 advapi32 crypt32 gdi32 user32)
     target_link_libraries(miner ws2_32 advapi32 crypt32 gdi32 user32)
-    target_link_libraries(WalletUpgrader ws2_32 advapi32 crypt32 gdi32 user32)
     target_link_libraries(P2P bcrypt)
 endif()
 
@@ -123,6 +115,7 @@ target_link_libraries(CryptoNoteCore PUBLIC Common Crypto Http Logging P2P Rpc S
 # this target instead of spreading across the whole project.
 target_link_libraries(CryptoNoteCore PRIVATE RocksDB::rocksdb)
 target_link_libraries(cryptotest Common Crypto Snapshot rapidjson cxxopts::cxxopts)
+target_link_libraries(releasetest CryptoNoteCore Logging RocksDB::rocksdb)
 target_link_libraries(DeroGoldd CryptoNoteCore Errors System cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson RocksDB::rocksdb)
 target_link_libraries(Errors Crypto SubWallets Utilities)
 target_link_libraries(Logging Common)
@@ -140,41 +133,35 @@ target_link_libraries(Utilities Common Errors rapidjson)
 target_link_libraries(Wallet Common CryptoNoteCore NodeRpcProxy Transfers WalletBackend)
 target_link_libraries(WalletApi WalletBackend cxxopts::cxxopts httplib::httplib OpenSSL::Crypto OpenSSL::SSL)
 target_link_libraries(WalletBackend Config Logger Mnemonics Nigel Serialization SubWallets Utilities Wallet cryptopp::cryptopp rapidjson)
-target_link_libraries(WalletService Errors JsonRpcServer Mnemonics Wallet cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson)
-target_link_libraries(WalletUpgrader Common Utilities WalletBackend cxxopts::cxxopts)
 target_link_libraries(zedwallet++ WalletBackend cxxopts::cxxopts OpenSSL::Crypto OpenSSL::SSL rapidjson)
 
 # Add dependencies means we have to build the latter before we build the former
 # In this case it's because we need to have the current version name rather
 # than a cached one
 add_dependencies(cryptotest version)
+add_dependencies(releasetest version)
 add_dependencies(miner version)
-add_dependencies(JsonRpcServer version)
 add_dependencies(P2P version)
 add_dependencies(Rpc version)
 add_dependencies(DeroGoldd version)
-add_dependencies(WalletUpgrader version)
 add_dependencies(WalletApi version)
-add_dependencies(WalletService version)
 add_dependencies(zedwallet++ version)
 
 # Finally build the binaries
 set_property(TARGET DeroGoldd PROPERTY OUTPUT_NAME "DeroGoldd")
 set_property(TARGET zedwallet++ PROPERTY OUTPUT_NAME "degwallet")
-set_property(TARGET WalletService PROPERTY OUTPUT_NAME "DeroGold-service")
 set_property(TARGET miner PROPERTY OUTPUT_NAME "miner")
 set_property(TARGET cryptotest PROPERTY OUTPUT_NAME "cryptotest")
 set_property(TARGET WalletApi PROPERTY OUTPUT_NAME "wallet-api")
-set_property(TARGET WalletUpgrader PROPERTY OUTPUT_NAME "degwallet-upgrader")
 
 # Additional make targets, can be used to build a subset of the targets
-# e.g. make pool will build only DeroGoldd and service
-add_custom_target(pool DEPENDS DeroGoldd WalletService)
+# e.g. make pool will build only DeroGoldd
+add_custom_target(pool DEPENDS DeroGoldd)
 add_custom_target(solominer DEPENDS DeroGoldd zedwallet++ miner)
 add_custom_target(cli DEPENDS DeroGoldd zedwallet++)
 add_custom_target(cli-wallet DEPENDS zedwallet++)
 
-install(TARGETS DeroGoldd zedwallet++ WalletService miner WalletApi WalletUpgrader)
+install(TARGETS DeroGoldd zedwallet++ miner WalletApi)
 
 # CPack
 set(CPACK_PACKAGE_NAME "DeroGold")
@@ -196,3 +183,4 @@ include(CPack)
 
 # CTest
 add_test(NAME CryptoTest COMMAND ${CMAKE_BINARY_DIR}/src/cryptotest)
+add_test(NAME ReleaseCompatibilityTest COMMAND ${CMAKE_BINARY_DIR}/src/releasetest)

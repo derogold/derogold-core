@@ -6,6 +6,7 @@
 
 #include "TransactionPoolCleaner.h"
 
+#include "TransactionPoolPolicy.h"
 #include "Core.h"
 #include "Mixins.h"
 #include "common/StringTools.h"
@@ -51,11 +52,6 @@ namespace CryptoNote
     bool TransactionPoolCleanWrapper::removeTransaction(const Crypto::Hash &hash)
     {
         return transactionPool->removeTransaction(hash);
-    }
-
-    size_t TransactionPoolCleanWrapper::getFusionTransactionCount() const
-    {
-        return transactionPool->getFusionTransactionCount();
     }
 
     size_t TransactionPoolCleanWrapper::getTransactionCount() const
@@ -115,13 +111,17 @@ namespace CryptoNote
             std::vector<Crypto::Hash> deletedTransactions;
             for (const auto &hash : transactionHashes)
             {
-                uint64_t transactionAge = currentTime - transactionPool->getTransactionReceiveTime(hash);
-                if (transactionAge >= timeout)
+                const uint64_t receiveTime = transactionPool->getTransactionReceiveTime(hash);
+                const bool expired = TransactionPoolPolicy::isExpired(currentTime, receiveTime, timeout);
+                if (expired)
                 {
                     logger(Logging::DEBUGGING) << "Deleting transaction " << Common::podToHex(hash) << " from pool";
-                    recentlyDeletedTransactions.emplace(hash, currentTime);
-                    transactionPool->removeTransaction(hash);
-                    deletedTransactions.emplace_back(std::move(hash));
+                    recentlyDeletedTransactions.insert_or_assign(hash, currentTime);
+                    if (transactionPool->removeTransaction(hash))
+                    {
+                        deletedTransactions.emplace_back(hash);
+                    }
+                    continue;
                 }
 
                 CachedTransaction transaction = transactionPool->getTransaction(hash);
@@ -134,9 +134,11 @@ namespace CryptoNote
                 {
                     logger(Logging::DEBUGGING)
                         << "Deleting invalid transaction " << Common::podToHex(hash) << " from pool." << error;
-                    recentlyDeletedTransactions.emplace(hash, currentTime);
-                    transactionPool->removeTransaction(hash);
-                    deletedTransactions.emplace_back(std::move(hash));
+                    recentlyDeletedTransactions.insert_or_assign(hash, currentTime);
+                    if (transactionPool->removeTransaction(hash))
+                    {
+                        deletedTransactions.emplace_back(hash);
+                    }
                 }
             }
 
@@ -156,15 +158,21 @@ namespace CryptoNote
 
     bool TransactionPoolCleanWrapper::isTransactionRecentlyDeleted(const Crypto::Hash &hash) const
     {
-        auto it = recentlyDeletedTransactions.find(hash);
-        return it != recentlyDeletedTransactions.end() && it->second >= timeout;
+        const auto it = recentlyDeletedTransactions.find(hash);
+        if (it == recentlyDeletedTransactions.end())
+        {
+            return false;
+        }
+
+        const uint64_t currentTime = timeProvider->now();
+        return TransactionPoolPolicy::isRecentlyDeleted(currentTime, it->second, timeout);
     }
 
     void TransactionPoolCleanWrapper::cleanRecentlyDeletedTransactions(uint64_t currentTime)
     {
         for (auto it = recentlyDeletedTransactions.begin(); it != recentlyDeletedTransactions.end();)
         {
-            if (currentTime - it->second >= timeout)
+            if (!TransactionPoolPolicy::isRecentlyDeleted(currentTime, it->second, timeout))
             {
                 it = recentlyDeletedTransactions.erase(it);
             }

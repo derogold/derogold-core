@@ -20,6 +20,7 @@
 #include <cryptonotecore/DatabaseBlockchainCache.h>
 #include <cryptonotecore/CoreErrors.h>
 #include <cryptonotecore/DatabaseBlockchainCache.h>
+#include <cryptonotecore/ForkChoice.h>
 #include <cryptonotecore/CryptoNoteFormatUtils.h>
 #include <cryptonotecore/ITimeProvider.h>
 #include <cryptonotecore/Mixins.h>
@@ -1500,6 +1501,7 @@ namespace CryptoNote
         }
 
         auto ret = error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE;
+        IBlockchainCache *notificationChain = cache;
 
         if (addOnTop)
         {
@@ -1549,30 +1551,9 @@ namespace CryptoNote
                         std::move(rawBlock));
                     logger(Logging::DEBUGGING) << "Block " << blockStr << " added to alternative chain.";
 
-                    auto mainChainCache = chainsLeaves[0];
-                    if (cache->getCurrentCumulativeDifficulty() > mainChainCache->getCurrentCumulativeDifficulty())
+                    if (switchMainChainIfBetter(cache, validatorState, blockStr))
                     {
-                        size_t endpointIndex = std::distance(
-                            chainsLeaves.begin(), std::find(chainsLeaves.begin(), chainsLeaves.end(), cache));
-                        assert(endpointIndex != chainsStorage.size());
-                        assert(endpointIndex != 0);
-                        std::swap(chainsLeaves[0], chainsLeaves[endpointIndex]);
-                        updateMainChainSet();
-
-                        updateBlockMedianSize();
-
-                        /* Take the current block spent key images and run them
-                           against the pool to remove any transactions that may
-                           be in the pool that would now be considered invalid */
-                        checkAndRemoveInvalidPoolTransactions(validatorState);
-
-                        copyTransactionsToPool(chainsLeaves[endpointIndex]);
-
                         ret = error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED;
-
-                        logger(Logging::INFO) << "Resolved: " << blockStr
-                                              << ", Previous: " << chainsLeaves[endpointIndex]->getTopBlockIndex()
-                                              << " (" << chainsLeaves[endpointIndex]->getTopBlockHash() << ")";
                     }
                 }
             }
@@ -1586,6 +1567,7 @@ namespace CryptoNote
                 auto newlyForkedChainPtr = newCache.get();
                 chainsStorage.emplace_back(std::move(newCache));
                 chainsLeaves.push_back(newlyForkedChainPtr);
+                notificationChain = newlyForkedChainPtr;
 
                 logger(Logging::DEBUGGING) << "Resolving: " << blockStr;
 
@@ -1598,8 +1580,10 @@ namespace CryptoNote
                     currentDifficulty,
                     std::move(rawBlock));
 
-                updateMainChainSet();
-                updateBlockMedianSize();
+                if (switchMainChainIfBetter(newlyForkedChainPtr, validatorState, blockStr))
+                {
+                    ret = error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED;
+                }
             }
         }
         else
@@ -1648,6 +1632,7 @@ namespace CryptoNote
             auto newlyForkedChainPtr = newCache.get();
             chainsStorage.emplace_back(std::move(newCache));
             chainsLeaves.push_back(newlyForkedChainPtr);
+            notificationChain = newlyForkedChainPtr;
 
             newlyForkedChainPtr->pushBlock(
                 cachedBlock,
@@ -1658,13 +1643,96 @@ namespace CryptoNote
                 currentDifficulty,
                 std::move(rawBlock));
 
-            updateMainChainSet();
+            if (switchMainChainIfBetter(newlyForkedChainPtr, validatorState, blockStr))
+            {
+                ret = error::AddBlockErrorCode::ADDED_TO_ALTERNATIVE_AND_SWITCHED;
+            }
         }
 
         logger(Logging::DEBUGGING) << "Block: " << blockStr << " successfully added";
-        notifyOnSuccess(ret, previousBlockIndex, cachedBlock, *cache);
+        notifyOnSuccess(ret, previousBlockIndex, cachedBlock, *notificationChain);
 
         return ret;
+    }
+
+    bool Core::switchMainChainIfBetter(
+        IBlockchainCache *candidate,
+        const TransactionValidatorState &blockTransactionsState,
+        const std::string &blockDescription)
+    {
+        assert(candidate != nullptr);
+        assert(!chainsLeaves.empty());
+
+        IBlockchainCache *currentMain = chainsLeaves[0];
+        if (candidate == currentMain)
+        {
+            return false;
+        }
+
+        std::unordered_set<IBlockchainCache *> mainPath;
+        for (IBlockchainCache *segment = currentMain; segment != nullptr; segment = segment->getParent())
+        {
+            mainPath.insert(segment);
+        }
+
+        IBlockchainCache *commonSegment = candidate;
+        while (commonSegment != nullptr && mainPath.count(commonSegment) == 0)
+        {
+            commonSegment = commonSegment->getParent();
+        }
+
+        const uint32_t forkHeight = commonSegment == nullptr ? 0 : commonSegment->getTopBlockIndex() + 1;
+        const Crypto::Hash mainFirstDivergentHash = currentMain->getBlockHash(forkHeight);
+        const Crypto::Hash candidateFirstDivergentHash = candidate->getBlockHash(forkHeight);
+        const uint64_t mainWork = currentMain->getCurrentCumulativeDifficulty();
+        const uint64_t candidateWork = candidate->getCurrentCumulativeDifficulty();
+
+        if (!ForkChoice::shouldSwitchToCandidate(
+                mainWork,
+                candidateWork,
+                forkHeight,
+                mainFirstDivergentHash,
+                candidateFirstDivergentHash))
+        {
+            logger(Logging::DEBUGGING)
+                << "Fork candidate retained as alternative: block " << blockDescription
+                << ", fork height " << forkHeight << ", main first divergent hash " << mainFirstDivergentHash
+                << ", candidate first divergent hash " << candidateFirstDivergentHash
+                << ", main tip " << currentMain->getTopBlockIndex() << " (" << currentMain->getTopBlockHash()
+                << "), main cumulative difficulty " << mainWork << ", candidate tip "
+                << candidate->getTopBlockIndex() << " (" << candidate->getTopBlockHash()
+                << "), candidate cumulative difficulty " << candidateWork;
+            return false;
+        }
+
+        const uint32_t oldTipHeight = currentMain->getTopBlockIndex();
+        const Crypto::Hash oldTipHash = currentMain->getTopBlockHash();
+        const uint32_t newTipHeight = candidate->getTopBlockIndex();
+        const Crypto::Hash newTipHash = candidate->getTopBlockHash();
+
+        const auto candidatePosition = std::find(chainsLeaves.begin(), chainsLeaves.end(), candidate);
+        assert(candidatePosition != chainsLeaves.end());
+        const size_t candidateIndex = std::distance(chainsLeaves.begin(), candidatePosition);
+        assert(candidateIndex != 0);
+
+        std::swap(chainsLeaves[0], chainsLeaves[candidateIndex]);
+        updateMainChainSet();
+        updateBlockMedianSize();
+
+        checkAndRemoveInvalidPoolTransactions(blockTransactionsState);
+        copyTransactionsToPool(chainsLeaves[candidateIndex]);
+
+        logger(Logging::INFO)
+            << "Chain switch: fork height " << forkHeight << ", old tip " << oldTipHeight << " (" << oldTipHash
+            << "), old cumulative difficulty " << mainWork << ", new tip " << newTipHeight << " (" << newTipHash
+            << "), new cumulative difficulty " << candidateWork << ", work advantage "
+            << (candidateWork - mainWork) << ", selection reason "
+            << (candidateWork > mainWork ? "greater cumulative difficulty" : "lower first-divergent block hash")
+            << ", main first divergent hash " << mainFirstDivergentHash
+            << ", candidate first divergent hash " << candidateFirstDivergentHash
+            << ", trigger block " << blockDescription;
+
+        return true;
     }
 
     /* This method is a light version of transaction validation that is used
@@ -2074,14 +2142,6 @@ namespace CryptoNote
         TransactionValidatorState &validatorState)
     {
         const auto transactionHash = cachedTransaction.getTransactionHash();
-
-        /* If there are already a certain number of fusion transactions in
-           the pool, then do not try to add another */
-        if (cachedTransaction.getTransactionFee() == 0
-            && transactionPool->getFusionTransactionCount() >= CryptoNote::parameters::FUSION_TX_MAX_POOL_COUNT)
-        {
-            return {false, "Pool already contains the maximum amount of fusion transactions"};
-        }
 
         uint64_t fee;
         const uint64_t lastTimestamp = chainsLeaves[0]->getLastTimestamps(1)[0];

@@ -88,21 +88,16 @@ private:
     std::atomic<bool> m_compactDbRunning {false};
     std::atomic<bool> m_compactDbLastSuccess {true};
     std::atomic<bool> m_compactDbHasRun {false};
-    std::atomic<bool> m_stopCompactDbScheduler {false};
     std::chrono::steady_clock::time_point m_compactDbStart;
     uint64_t m_compactDbStartedAtEpoch = 0;
     uint64_t m_compactDbFinishedAtEpoch = 0;
     uint64_t m_compactDbStartedAtHeight = 0;
     uint64_t m_compactDbFinishedAtHeight = 0;
-    std::atomic<uint64_t> m_compactDbSchedulerCheckIntervalSeconds {60};
-    uint32_t m_compactDbNearSyncStreak = 0;
     std::string m_compactDbLastError;
     std::mutex m_compactDbMutex;
-    std::thread m_compactDbSchedulerThread;
 
     void refresh_compaction_state_locked();
     bool start_compaction_locked(const std::string &reason);
-    void compact_db_scheduler_loop();
 
     std::string get_commands_str() const;
 

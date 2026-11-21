@@ -141,7 +141,7 @@ docker run -d \
     -p 42069:42069 \
     -p 6969:6969 \
     -v derogold-data:/data \
-    derogoldd:latest --data-dir=/data --sync-from-height=2700000
+    derogoldd:latest --data-dir=/data --sync-from-height=2700000 --enable-mining=false
 ```
 
 **Pruned node:**
@@ -288,9 +288,8 @@ Pass the socket path where a daemon address goes. An absolute path or an
 either, so a hostname is never mistaken for a path.
 
 ```bash
-./zedwallet++ --remote-daemon /run/derogold/daemon.sock
-./WalletService --daemon-address /run/derogold/daemon.sock
-./WalletApi --rpc-password <password> --daemon-address /run/derogold/daemon.sock
+./degwallet --remote-daemon /run/derogold/daemon.sock
+./wallet-api --rpc-password <password> --daemon-address /run/derogold/daemon.sock
 ./miner --daemon-address /run/derogold/daemon.sock --address <address>
 ```
 
@@ -339,7 +338,7 @@ The DeroGold blockchain is 350 GB+ from genesis. The `--sync-from-height` flag l
 
 On first launch with an empty database, the node injects a trusted anchor block at the specified height (verified against the hard-coded checkpoints) and begins downloading only blocks from that point onward. Blocks below the sync floor are trusted via the checkpoint — ring signature verification is bypassed for historical inputs that predate the floor, identically to how the standard checkpoint zone works.
 
-> **Note:** Do not use `--sync-from-height` on mining nodes. Miners must have the full chain to correctly validate all outputs.
+> **Note:** A bootstrap node cannot mine. The daemon rejects `--sync-from-height` unless mining is explicitly disabled, and it refuses both mining RPC and built-in Stratum on a bootstrap database. Miners must retain the full chain to validate all outputs.
 
 ### Available sync floors
 
@@ -350,7 +349,7 @@ On first launch with an empty database, the node injects a trusted anchor block 
 ### Usage
 
 ```bash
-./DeroGoldd --sync-from-height=2700000
+./DeroGoldd --sync-from-height=2700000 --enable-mining=false
 ```
 
 The argument must match a supported height listed above. If the database already contains blocks the flag is silently ignored — use `--resync` first if you need a clean start.

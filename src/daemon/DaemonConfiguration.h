@@ -56,6 +56,9 @@ namespace DaemonConfig
         std::string enableCors;
         std::string feeAddress;
         int feeAmount = 0;
+        /* Controls block-template and block-submission RPC methods. Bootstrap
+           nodes created with --sync-from-height must keep this disabled. */
+        bool enableMining = true;
 
         /* Serve the RPC on a local AF_UNIX socket as well as the TCP port.
            Empty leaves it off. The mode on the socket file is the entire

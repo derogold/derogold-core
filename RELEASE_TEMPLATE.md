@@ -1,4 +1,11 @@
-# Change Logs from v1.0.0
+# DeroGold v1.0.2.0
+
+## Mandatory network upgrade
+
+- Fork index 11 activates at block **3,000,000**.
+- At and after the fork, equal-work competing branches converge deterministically by choosing the lower hash at the first differing block after their common ancestor. Greater cumulative work continues to win at every height.
+- P2P protocol version 11 is mandatory. Earlier node releases are intentionally disconnected and must upgrade before block 3,000,000.
+- Validated alternative full and lite blocks are relayed, allowing competing pools to learn about and converge on the winning branch.
 
 ## Daemon
 - Changed seed node address.
@@ -16,7 +23,10 @@
 - Added `prune_status` daemon console command to show prune mode, depth, and current prune floor height.
 - Added `compact_db [start|status|wait|stop]` daemon console command to manually manage RocksDB compaction.
 - Added `db_status` daemon console command to show database size and file statistics.
-- Added automatic adaptive RocksDB compaction scheduler (60s interval during sync, 30min near chain tip).
+- Removed the automatic full-range RocksDB compaction scheduler. RocksDB retains its normal incremental background compaction; operators can still run deliberate maintenance with `compact_db start` or `--db-optimize`.
+- Fixed competing-chain handling so every accepted alternative branch is evaluated and reorganisation cleanup no longer performs quadratic mempool work.
+- Removed legacy mempool count brakes, including the 130 zero-fee/fusion transaction cap. Transaction proof-of-work remains enforced.
+- Restored the `--enable-mining` control and reject `--sync-from-height` together with mining RPC or built-in Stratum. Bootstrap databases also reject block-template and block-submission RPC calls at runtime.
 
 ## Wallet
 - Removed the `optimize` command, and with it the fusion transactions the wallet used to send.
@@ -68,7 +78,7 @@ build itself — see [BUILDING.md](BUILDING.md) — but are not published here.
 New in this release: you can skip downloading the full chain history by using `--sync-from-height`:
 
 ```
-./DeroGoldd --sync-from-height=2700000
+./DeroGoldd --sync-from-height=2700000 --enable-mining=false
 ```
 
 See the [README](README.md#fast-sync---sync-from-height) for full details and all supported heights.

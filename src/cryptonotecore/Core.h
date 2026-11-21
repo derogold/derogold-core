@@ -450,6 +450,11 @@ namespace CryptoNote
 
         void copyTransactionsToPool(IBlockchainCache *alt);
 
+        bool switchMainChainIfBetter(
+            IBlockchainCache *candidate,
+            const TransactionValidatorState &blockTransactionsState,
+            const std::string &blockDescription);
+
         void checkAndRemoveInvalidPoolTransactions(
             const TransactionValidatorState& blockTransactionsState);
 

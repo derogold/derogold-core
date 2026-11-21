@@ -19,7 +19,7 @@ else()
     message(CHECK_PASS "${CMAKE_BINARY_DIR_NORMAL}")
 endif()
 
-project(DeroGold VERSION 1.0.1.0 HOMEPAGE_URL https://derogold.com LANGUAGES C CXX ASM)
+project(DeroGold VERSION 1.0.2.0 HOMEPAGE_URL https://derogold.com LANGUAGES C CXX ASM)
 
 # Dependencies come from three places, no package manager involved:
 #
