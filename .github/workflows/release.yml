@@ -66,6 +66,23 @@ jobs:
         if: runner.os == 'Linux' && matrix.arch == 'arm64'
         shell: bash
         run: |
+          # GitHub's amd64 Ubuntu sources do not serve foreign-architecture
+          # packages. Keep those sources amd64-only and obtain arm64 from the
+          # official Ubuntu ports archive.
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i -E '/^deb / s/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          fi
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: jammy jammy-updates jammy-backports jammy-security
+          Components: main restricted universe multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.install }} libssl-dev:arm64
