@@ -307,6 +307,12 @@ namespace CryptoNote
         int ret = 0;
         handled = true;
 
+        if (ctx.peerId && ctx.version < minimumPeerVersion(m_payload_handler.get_current_blockchain_height()))
+        {
+            ctx.m_state = CryptoNoteConnectionContext::state_shutdown;
+            return 0;
+        }
+
         if (cmd.isResponse && cmd.command == COMMAND_TIMED_SYNC::ID)
         {
             if (!handleTimedSyncResponse(cmd.buf, ctx))
@@ -836,7 +842,7 @@ namespace CryptoNote
             return false;
         }
 
-        if (rsp.node_data.version < CryptoNote::P2P_MINIMUM_VERSION)
+        if (rsp.node_data.version < minimumPeerVersion(m_payload_handler.get_current_blockchain_height()))
         {
             logger(Logging::DEBUGGING) << context << "COMMAND_HANDSHAKE Failed, peer is wrong version! ("
                                        << std::to_string(rsp.node_data.version) << "), closing connection.";
@@ -889,6 +895,12 @@ namespace CryptoNote
         auto cmdBuf = LevinProtocol::encode<COMMAND_TIMED_SYNC::request>(arg);
 
         forEachConnection([&](P2pConnectionContext &conn) {
+            if (conn.peerId && conn.version < minimumPeerVersion(arg.payload_data.current_height))
+            {
+                conn.m_state = CryptoNoteConnectionContext::state_shutdown;
+                safeInterrupt(conn);
+                return;
+            }
             if (conn.peerId
                 && (conn.m_state == CryptoNoteConnectionContext::state_normal
                     || conn.m_state == CryptoNoteConnectionContext::state_idle))
@@ -1748,7 +1760,7 @@ namespace CryptoNote
             return 1;
         }
 
-        if (arg.node_data.version < CryptoNote::P2P_MINIMUM_VERSION)
+        if (arg.node_data.version < minimumPeerVersion(m_payload_handler.get_current_blockchain_height()))
         {
             logger(Logging::DEBUGGING) << context << "UNSUPPORTED NETWORK AGENT VERSION CONNECTED! version="
                                        << std::to_string(arg.node_data.version);

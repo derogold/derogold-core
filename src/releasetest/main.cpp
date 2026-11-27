@@ -140,7 +140,11 @@ namespace
                   == 3000000,
               "deterministic fork choice activates at block 3000000");
         check(CryptoNote::P2P_CURRENT_VERSION == 11 && CryptoNote::P2P_MINIMUM_VERSION == 11,
-              "P2P protocol 11 excludes older daemon releases");
+              "upgraded daemons advertise protocol 11");
+        check(CryptoNote::minimumPeerVersion(activationHeight) == 9
+                  && CryptoNote::minimumPeerVersion(activationHeight + 1) == 11
+                  && CryptoNote::minimumPeerVersion(activationHeight + 2) == 11,
+              "legacy handshakes close once local tip reaches fork 11");
 
         using CryptoNote::error::AddBlockErrorCode;
         check(CryptoNote::BlockRelayPolicy::shouldRelay(AddBlockErrorCode::ADDED_TO_MAIN),
