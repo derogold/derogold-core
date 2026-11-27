@@ -67,6 +67,7 @@ namespace CryptoNote
 
         CoreStatistics getStatistics();
 
+        uint32_t get_current_blockchain_height();
         bool get_payload_sync_data(CORE_SYNC_DATA &hshd);
 
         bool process_payload_sync_data(
@@ -153,7 +154,7 @@ namespace CryptoNote
         void relayTransactions(const std::vector<BinaryArray> &transactions) override;
 
         //----------------------------------------------------------------------------------
-        uint32_t get_current_blockchain_height();
+
 
         bool request_missing_objects(CryptoNoteConnectionContext &context, bool check_having_blocks);
 

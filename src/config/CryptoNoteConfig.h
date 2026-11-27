@@ -348,6 +348,12 @@ namespace CryptoNote
 
     const uint8_t P2P_MINIMUM_VERSION = 11;
 
+    // Chain size is the locally validated tip index plus one.
+    constexpr uint8_t minimumPeerVersion(uint32_t chainSize)
+    {
+        return chainSize > parameters::DETERMINISTIC_FORK_CHOICE_HEIGHT ? P2P_MINIMUM_VERSION : 9;
+    }
+
     // This defines the minimum P2P version required for lite blocks propogation
     const uint8_t P2P_LITE_BLOCKS_PROPOGATION_VERSION = 0;
 
